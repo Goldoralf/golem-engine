@@ -1,0 +1,36 @@
+#!/usr/bin/env python
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Overlay golem : construit les outils de golem/tools contre libardour, comme session_utils.
+import os
+from waflib.extras import autowaf as autowaf
+
+
+def options(opt):
+    pass
+
+
+def configure(conf):
+    pass
+
+
+def build(bld):
+    if 'dummy' not in bld.env['BACKENDS']:
+        return
+    for src in bld.path.ant_glob('tools/*.cc'):
+        name = os.path.splitext(os.path.basename(str(src)))[0]
+        obj = bld(features='cxx c cxxprogram')
+        obj.cxxflags = ['-fvisibility=default']
+        obj.source = ['../session_utils/common.cc', 'tools/' + name + '.cc']
+        obj.target = 'golem-' + name
+        obj.includes = ['.', '../session_utils', '../libs']
+        obj.use = ['libpbd', 'libardour', 'libardour_cp', 'libtemporal', 'libmidipp', 'libsuil']
+        obj.defines = [
+            'VERSIONSTRING="' + bld.env['VERSION'] + '"',
+            'UTILNAME="golem-' + name + '"',
+            'DATA_DIR="' + autowaf.normpath(bld.env['DATADIR']) + '"',
+            'CONFIG_DIR="' + autowaf.normpath(bld.env['SYSCONFDIR']) + '"',
+            'LOCALEDIR="' + os.path.join(autowaf.normpath(bld.env['DATADIR']), 'locale') + '"',
+            'PACKAGE="GOLEMUTILS"',
+        ]
+        obj.uselib = 'UUID FLAC FONTCONFIG GLIBMM GIOMM GTHREAD OGG CURL DL XML LO FFTW3F TAGLIB LILV RUBBERBAND AUBIO LRDF ARCHIVE VAMPSDK VAMPHOSTSDK USB'
+        obj.install_path = bld.env['LIBDIR'] + '/utils'
