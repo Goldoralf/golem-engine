@@ -412,6 +412,10 @@ children = [
         'libs/auscan',
 ]
 
+# golem: overlay (golem/), built only when present -- see golem/README.md
+if os.path.isdir('golem'):
+    children.append('golem')
+
 i18n_children = [
         'gtk2_ardour',
         'libs/ardour',
