@@ -801,6 +801,8 @@ int main() { return 0; }''',
         conf.define('MIXBUS', 1)
 
     compiler_flags.append ('-DPROGRAM_NAME="' + Options.options.program_name + '"')
+    # file-system-safe form of the program name (binaries, config folder, client name): "Golem Engine" -> "golem-engine"
+    compiler_flags.append ('-DPROGRAM_SLUG="' + Options.options.program_name.lower().replace(' ', '-') + '"')
     compiler_flags.append ('-DPROGRAM_VERSION="' + PROGRAM_VERSION + '"')
 
     if opt.debug:
@@ -1000,6 +1002,7 @@ def configure(conf):
             conf.fatal("--freedesktop requires itstool > 2.0.0 to translate files.")
 
     conf.env['PROGRAM_NAME'] = Options.options.program_name or 'Ardour'
+    conf.env['PROGRAM_SLUG'] = conf.env['PROGRAM_NAME'].lower().replace(' ', '-')
 
     conf.env['VERSION'] = VERSION
     conf.env['MAJOR'] = MAJOR

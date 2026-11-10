@@ -59,7 +59,11 @@ user_config_directory_name (int version = -1)
 	   product name etc.
 	*/
 
+#if defined (__APPLE__) || defined (PLATFORM_WINDOWS)
 	const string config_dir_name = string_compose ("%1%2", X_(PROGRAM_NAME), version);
+#else
+	const string config_dir_name = string_compose ("%1%2", X_(PROGRAM_SLUG), version);
+#endif
 
 #if defined (__APPLE__) || defined (PLATFORM_WINDOWS)
 	/* Use mixed-case folder name on OS X and Windows */

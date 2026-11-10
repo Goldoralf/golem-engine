@@ -176,7 +176,7 @@ main (int argc, char* argv[])
 
 	bool try_hw_optimization = true;
 
-	backend_client_name = PBD::downcase (std::string (PROGRAM_NAME));
+	backend_client_name = PBD::downcase (std::string (PROGRAM_SLUG));
 
 	int c;
 	while ((c = getopt_long (argc, argv, optstring, longopts, (int*)0)) != EOF) {
