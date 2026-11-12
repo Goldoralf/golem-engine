@@ -1280,7 +1280,10 @@ AlsaAudioBackend::auto_update_midi_devices ()
 			continue;
 		}
 		_midi_devices[i->first] = new AlsaMidiDeviceInfo (false);
-		set_midi_device_enabled (i->first, true);
+		/* a host that opens its MIDI devices one by one (the Golem Engine) keeps hot-plugged devices closed */
+		if (!g_getenv ("ARDOUR_ALSA_MIDI_NO_HOTPLUG_OPEN")) {
+			set_midi_device_enabled (i->first, true);
+		}
 	}
 
 	for (std::map<std::string, struct AlsaMidiDeviceInfo*>::iterator i = _midi_devices.begin (); i != _midi_devices.end ();) {
