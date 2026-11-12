@@ -231,7 +231,10 @@ OSC::start ()
 
 	PBD::info << "OSC @ " << server_url << endmsg;
 
-	_zeroconf = new ZeroConf ("_osc._udp", _port, lo_url_get_hostname (server_url.c_str()));
+	/* a headless host whose only client is local (the Golem Engine) must not advertise the port on the network */
+	if (!g_getenv ("ARDOUR_OSC_NO_ZEROCONF")) {
+		_zeroconf = new ZeroConf ("_osc._udp", _port, lo_url_get_hostname (server_url.c_str()));
+	}
 
 	std::string url_file;
 
