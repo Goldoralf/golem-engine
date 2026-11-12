@@ -700,6 +700,43 @@ local function inventory (want)
 	log ("  plugins : " .. n .. "/" .. #(want or {}) .. " de la table présents")
 end
 
+-- ── LA SONDE DE TROUS (golem tools/check-scene-gap.py, docs/ardour-plan.md A2) : GoleM FX Gapmeter (golem-fx), le pendant
+-- de golem_gapmeter.jsfx. Une instance GÉNÉRATRICE (ton de test, il REMPLACE l'entrée) en queue de la piste d'entrée de
+-- la lane, des DÉTECTRICES (slot = rang) en queue du merge et des branches ; chacune envoie ses mesures en OSC/UDP au
+-- port de l'outil (127.0.0.1). Une piste stéréo reçoit UNE instance stéréo (Ardour en doublerait une mono : deux
+-- instances au même slot). `on = false` les retire toutes ; une reconstruction du rig les emporte avec ses routes.
+local GAPMETER = "476F6C654D46784761706D6574657231"
+local GAPS = {}
+local function gapmeter (c)
+	for _, g in ipairs (GAPS) do pcall (function () g.route:remove_processor (g.proc, nil, true) end) end
+	GAPS = {}
+	if not c.on then log ("gapmeter : sondes retirées"); return end
+	local AUDIO = ARDOUR.DataType ("audio")
+	local function add (name, entries)
+		local r = RIG.routes[name]
+		if not r then log ("  ⚠ gapmeter : route absente « " .. tostring (name) .. " »"); return end
+		local p = ARDOUR.LuaAPI.new_plugin (Session, GAPMETER, ARDOUR.PluginType.VST3, "")
+		if p:isnil () then log ("  ⚠ gapmeter : GoleM FX Gapmeter n'est pas installé"); return end
+		r:add_processor_by_index (p, -1, nil, true)
+		if r:output ():n_ports ():n_audio () >= 2 then
+			r:customize_plugin_insert (p, 1, ARDOUR.ChanCount (AUDIO, 2), ARDOUR.ChanCount (AUDIO, 0))
+		end
+		set_params ({ proc = p, spec = { id = "gapmeter" } }, entries)
+		GAPS[#GAPS + 1] = { route = r, proc = p }
+	end
+	local port = tonumber (c.port) or 9071
+	if c.tone and c.tone ~= "" then
+		add (c.tone, { { label = "Port", value = port }, { label = "Slot", value = 7 }, { label = "Test Tone", value = 1 },
+			{ label = "Tone Freq", value = tonumber (c.hz) or 196 }, { label = "Tone Level", value = tonumber (c.db) or -20 } })
+	end
+	for i, nm in ipairs (c.tracks or {}) do
+		add (nm, { { label = "Port", value = port }, { label = "Slot", value = i - 1 },
+			{ label = "Silence Threshold", value = tonumber ((c.thrs or {})[i]) or tonumber (c.thr) or -45 },
+			{ label = "Min Gap", value = tonumber (c.min_ms) or 10 } })
+	end
+	log ("gapmeter : " .. #GAPS .. " sonde(s), port " .. port)
+end
+
 local ACTIONS = {
 	plugins = function (c) inventory (c.want) end,
 	audio_set = function (c) if c.buffer then set_buffer (c.buffer) end; write_file (STATUS, json_encode (status ())) end,
@@ -730,6 +767,7 @@ local ACTIONS = {
 	end,
 	rig_verify = function (c) verify_files () end,
 	dump = function (c) dump () end,
+	gapmeter = function (c) gapmeter (c) end,
 	-- le banc des presets (golem tools/check-rig-materialize.py --render) : la session TELLE QUE LA SCÈNE L'A MONTÉE,
 	-- sauvée sous un nom d'état (la session vivante n'en change pas) ; le banc la copie, y pose la DI (golem-place
 	-- --disk --to-master) et l'exporte hors ligne. Le dump d'abord : il dit quelles routes lire et lesquelles sortent.
