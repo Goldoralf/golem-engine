@@ -4,7 +4,8 @@ libs=$TOP/build/libs
 export LD_LIBRARY_PATH="$(find "$libs" -name '*.so*' -printf '%h\n' | sort -u | tr '\n' ':')${LD_LIBRARY_PATH:-}"
 export ARDOUR_SURFACES_PATH=$libs/surfaces/osc:$libs/surfaces/mcp_http:$libs/surfaces/websockets:$libs/surfaces/generic_midi
 export ARDOUR_PANNER_PATH=$libs/panners
-export ARDOUR_DATA_PATH=$TOP/share:$TOP/build:$TOP/gtk2_ardour:$TOP/build/gtk2_ardour
+# golem/engine d'abord : ses scripts/ (le limiteur golem Safety, DSP Lua) sont trouvés comme ceux d'Ardour
+export ARDOUR_DATA_PATH=$TOP/golem/engine:$TOP/share:$TOP/build:$TOP/gtk2_ardour:$TOP/build/gtk2_ardour
 export ARDOUR_MIDIMAPS_PATH=$TOP/share/midi_maps
 export ARDOUR_MIDI_PATCH_PATH=$TOP/share/patchfiles
 export ARDOUR_EXPORT_FORMATS_PATH=$TOP/share/export

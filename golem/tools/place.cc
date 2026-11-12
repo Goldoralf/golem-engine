@@ -79,6 +79,12 @@ main (int argc, char* argv[])
 	std::shared_ptr<Region> whole = RegionFactory::create (status.sources, plist);
 	plist.remove (Properties::whole_file);
 	std::shared_ptr<Region> region = RegionFactory::create (whole, plist);
+	/* AUCUN FONDU : Ardour pose 64 échantillons de fondu à chaque bout d'une région ; le banc de parité doit faire
+	 * entrer la DI telle quelle (REAPER : fondus d'item à 0), sinon le cas « sans bloc » ne s'annulait qu'à -42 dB */
+	if (std::shared_ptr<AudioRegion> ar = std::dynamic_pointer_cast<AudioRegion> (region)) {
+		ar->set_fade_in_active (false);
+		ar->set_fade_out_active (false);
+	}
 
 	std::shared_ptr<Playlist> pl = t->playlist ();
 	pl->clear_changes ();
@@ -93,6 +99,14 @@ main (int argc, char* argv[])
 	s->save_state ("");
 	std::cout << "placed " << file << " on '" << track_name << "' (" << len.samples () << " samples, tail " << tail << " s)\n";
 
+	/* toutes nos références AVANT de fermer la session : une piste détruite après elle plantait à la sortie
+	 * (IO::~IO sur un mutex libéré, mesuré 2026-11-12 sur une piste mono) */
+	pl.reset ();
+	region.reset ();
+	whole.reset ();
+	status.sources.clear ();
+	t.reset ();
+	r.reset ();
 	SessionUtils::unload_session (s);
 	SessionUtils::cleanup ();
 	return EXIT_SUCCESS;
