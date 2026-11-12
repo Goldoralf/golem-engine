@@ -168,6 +168,7 @@ end
 local LIVEMAP = ROOT .. "/presets/.livemap.json"
 local RIGCHECK = ROOT .. "/presets/.rig-check.json"
 local DUMP = ROOT .. "/presets/.engine-dump.json"
+local SNAPSHOT = ROOT .. "/presets/.engine-snapshot.json"   -- la commande `snapshot` (le banc des presets)
 local NG = PBD.GroupControlDisposition.NoGroup
 local BACKEND_PTR = nil                -- le backend (open_session) : les claviers s'y ouvrent à la demande
 local MIDI_PORTS = {}                  -- appareil MIDI ouvert -> ses ports de capture (system:midi_capture_…)
@@ -425,6 +426,9 @@ local function apply_state (plan)
 		else
 			r:mute_control ():set_value (spec.mute and 1 or 0, NG)
 			r:gain_control ():set_value (ARDOUR.DSP.dB_to_coefficient (spec.gain_db or 0), NG)
+			-- le gain du merge AVANT ses plugins (le trim d'Ardour est en tête de route ; REAPER : un Volume Adjustment en
+			-- tête de chaîne), le niveau de scène sur le fader (gain_db) — golem/bridge ardour_plan.py
+			r:trim_control ():set_value (ARDOUR.DSP.dB_to_coefficient (spec.trim_db or 0), NG)
 			for _, bs in ipairs (spec.blocks or {}) do
 				local b = RIG.blocks[bs.id]
 				if b then
@@ -712,6 +716,16 @@ local ACTIONS = {
 	end,
 	rig_verify = function (c) verify_files () end,
 	dump = function (c) dump () end,
+	-- le banc des presets (golem tools/check-rig-materialize.py --render) : la session TELLE QUE LA SCÈNE L'A MONTÉE,
+	-- sauvée sous un nom d'état (la session vivante n'en change pas) ; le banc la copie, y pose la DI (golem-place
+	-- --disk --to-master) et l'exporte hors ligne. Le dump d'abord : il dit quelles routes lire et lesquelles sortent.
+	snapshot = function (c)
+		local name = tostring (c.name or "golem-snapshot"):gsub ("[^%w%-_]", "_")
+		dump ()
+		Session:save_state (name, false, false, false, false, false)
+		write_file (SNAPSHOT, json_encode ({ name = name, dir = Session:path (), preset = RIG.preset or "", at = os.time () }))
+		log ("  état « " .. name .. " » sauvé pour le banc")
+	end,
 }
 
 local function run (cmd)

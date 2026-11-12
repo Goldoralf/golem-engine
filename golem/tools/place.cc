@@ -6,15 +6,28 @@
  * C'est la moitié « entrée » du banc de rendu (docs/ardour-plan.md §4) : l'export est fait par
  * l'outil export de session_utils. Aucun moteur audio réel : le pilote factice.
  *
- *   golem-place <dossier de session> <nom d'état> <piste> <fichier.wav> [queue en secondes]
+ *   golem-place <dossier de session> <nom d'état> <piste> <fichier.wav> [queue en secondes] [--disk] [--to-master r1,r2…]
+ *
+ * Pour rendre une session MONTÉE PAR LE VEILLEUR (le banc des presets, docs/ardour-plan.md §7c) :
+ *   --disk        la piste joue sa région (monitoring disque) et son entrée est débranchée — le veilleur la met en
+ *                 monitoring d'ENTRÉE (la carte), un export n'entendrait rien ;
+ *   --to-master   les sorties de ces routes vont au master (le veilleur les relie à la carte, l'export rend le master) :
+ *                 une sortie mono sur les deux entrées du master, comme la carte ; une stéréo canal par canal.
  */
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 
 #include "common.h"
 
+#include <sstream>
+#include <vector>
+
+#include "ardour/audio_port.h"
 #include "ardour/audio_track.h"
+#include "ardour/io.h"
+#include "ardour/monitor_control.h"
 #include "ardour/audioregion.h"
 #include "ardour/import_status.h"
 #include "ardour/location.h"
@@ -26,6 +39,19 @@
 using namespace ARDOUR;
 using namespace SessionUtils;
 
+/* une route par son nom tel que le veilleur l'a donné : au rechargement, Ardour rend le nom légal pour un port
+ * (« GoleM:guitar-1 » devient « GoleM_guitar-1 », mesuré 2026-11-12) */
+static std::shared_ptr<Route>
+find_route (Session* s, std::string name)
+{
+	std::shared_ptr<Route> r = s->route_by_name (name);
+	if (!r) {
+		std::replace (name.begin (), name.end (), ':', '_');
+		r = s->route_by_name (name);
+	}
+	return r;
+}
+
 int
 main (int argc, char* argv[])
 {
@@ -34,15 +60,38 @@ main (int argc, char* argv[])
 		return EXIT_FAILURE;
 	}
 	const std::string dir = argv[1], state = argv[2], track_name = argv[3], file = argv[4];
-	const double tail = argc > 5 ? atof (argv[5]) : 3.0;
+	double tail = 3.0;
+	bool disk = false;
+	std::vector<std::string> to_master;
+	for (int i = 5; i < argc; ++i) {
+		const std::string a = argv[i];
+		if (a == "--disk") {
+			disk = true;
+		} else if (a == "--to-master" && i + 1 < argc) {
+			std::stringstream ss (argv[++i]);
+			std::string n;
+			while (std::getline (ss, n, ',')) {
+				if (!n.empty ()) {
+					to_master.push_back (n);
+				}
+			}
+		} else {
+			tail = atof (a.c_str ());
+		}
+	}
 
 	SessionUtils::init (true);
 	Session* s = SessionUtils::load_session (dir, state);
 
-	std::shared_ptr<Route> r = s->route_by_name (track_name);
+	std::shared_ptr<Route> r = find_route (s, track_name);
 	std::shared_ptr<AudioTrack> t = std::dynamic_pointer_cast<AudioTrack> (r);
 	if (!t) {
-		std::cerr << "no audio track named '" << track_name << "'\n";
+		std::cerr << "no audio track named '" << track_name << "' — routes:";
+		std::shared_ptr<RouteList const> rl = s->get_routes ();
+		for (auto const& ro : *rl) {
+			std::cerr << " '" << ro->name () << "'";
+		}
+		std::cerr << "\n";
 		SessionUtils::unload_session (s);
 		SessionUtils::cleanup ();
 		return EXIT_FAILURE;
@@ -96,6 +145,28 @@ main (int argc, char* argv[])
 		range->set (timepos_t (0), timepos_t (end));
 	}
 
+	if (disk) {
+		/* écrit TOUT DE SUITE : set_value passe par la file temps réel, que rien ne vide ici (aucun cycle audio) */
+		t->monitoring_control ()->set_value_unchecked (MonitorDisk);
+		t->input ()->disconnect ();
+	}
+	std::shared_ptr<Route> master = s->master_out ();
+	for (std::string const& n : to_master) {
+		std::shared_ptr<Route> ro = find_route (s, n);
+		if (!ro || !master) {
+			std::cerr << "no route named '" << n << "' (or no master)\n";
+			continue;
+		}
+		std::shared_ptr<IO> out = ro->output ();
+		std::shared_ptr<IO> min = master->input ();
+		const uint32_t no = out->n_ports ().n_audio (), nm = min->n_ports ().n_audio ();
+		out->disconnect ();
+		for (uint32_t m = 0; m < nm; ++m) {
+			/* mono : la même sortie sur chaque entrée du master ; stéréo : canal par canal */
+			out->audio (no == 1 ? 0 : m % no)->connect (min->audio (m)->name ());
+		}
+	}
+
 	s->save_state ("");
 	std::cout << "placed " << file << " on '" << track_name << "' (" << len.samples () << " samples, tail " << tail << " s)\n";
 
@@ -105,6 +176,7 @@ main (int argc, char* argv[])
 	region.reset ();
 	whole.reset ();
 	status.sources.clear ();
+	master.reset ();
 	t.reset ();
 	r.reset ();
 	SessionUtils::unload_session (s);
