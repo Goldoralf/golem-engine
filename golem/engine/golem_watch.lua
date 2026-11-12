@@ -416,8 +416,22 @@ local function write_drumtrans (proc, dt)
 	return true
 end
 
+-- le TEMPO du morceau (le plan le porte : la ligne de setlist, sinon le preset — golem/bridge ardour.py _bpm), comme
+-- golem_rig.lua le pose sur REAPER : les delays et trémolos synchronisés lisent le tempo de l'hôte (golem-fx)
+local function set_tempo (bpm)
+	bpm = tonumber (bpm)
+	if not bpm or bpm < 20 or bpm > 400 then return end
+	local cur = Temporal.TempoMap.read ():quarters_per_minute_at (Temporal.timepos_t (0))
+	if math.abs (cur - bpm) < 0.01 then return end
+	local tm = Temporal.TempoMap.write_copy ()
+	tm:set_tempo (Temporal.Tempo (bpm, bpm, 4), Temporal.timepos_t (0))
+	Temporal.TempoMap.update (tm)
+	log ("  tempo <- " .. bpm .. " BPM")
+end
+
 local function apply_state (plan)
 	-- l'état d'une scène sur un rig déjà posé : enable, mute, paramètres, gains. Aucun plugin ajouté ni retiré.
+	set_tempo (plan.bpm)
 	local missing = 0
 	for _, spec in ipairs (plan.tracks or {}) do
 		local r = RIG.routes[spec.name]
