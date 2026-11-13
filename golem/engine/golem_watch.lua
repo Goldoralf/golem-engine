@@ -278,6 +278,23 @@ local function file_loaded (b, prop, path)
 	return tostring (ARDOUR.LuaAPI.get_plugin_insert_property (b.proc:to_insert (), prop) or "") == path
 end
 
+-- LE LIMITEUR DE SÉCURITÉ compilé : gfx-limiter (classe GoleMFxLimiter01), réglé comme golem_safety.jsfx
+local SAFETY_VST3 = "476F6C654D46784C696D697465723031"
+local SAFETY_PARAMS = {
+	{ pid = "lookahead", label = "Lookahead", value = 0 },        -- aucune anticipation : latence 0
+	{ pid = "threshold", label = "Threshold", value = -1 },       -- plafond −1 dBFS
+	{ pid = "release", label = "Release", value = 15 },
+	{ pid = "style", label = "Style", value = 0 },                -- clean
+	{ pid = "auto_release", label = "Auto Release", value = 0 },
+	{ pid = "gain", label = "Input Gain", value = 0 },
+}
+-- l'index du dernier plugin d'une route (le limiteur de sécurité est posé en dernier)
+local function r_last_plugin (r)
+	local i = 0
+	while not r:nth_plugin (i):isnil () do i = i + 1 end
+	return i - 1
+end
+
 local function set_params (b, entries)
 	local proc = b.proc
 	local params = plugin_params (proc:to_insert ():plugin (0))
@@ -552,9 +569,20 @@ local function materialize (plan)
 		if spec.out and #spec.out > 0 then
 			-- le LIMITEUR DE SÉCURITÉ en dernier plugin de toute route qui sort vers la carte (golem_safety.jsfx sous
 			-- REAPER, porté à l'identique : -1 dBFS, aucune anticipation) — après les blocs : il ne décale aucun index
-			local sp = ARDOUR.LuaAPI.new_luaproc (Session, "golem Safety")
-			if sp:isnil () then log ("  ⚠ " .. spec.name .. " : limiteur golem Safety introuvable (ARDOUR_DATA_PATH)")
-			else r:add_processor_by_index (sp, -1, nil, true) end
+			-- COMPILÉ d'abord (2026-11-13) : le DSP Lua coûtait 323 µs par cycle de 4 ms (dspstats, golem
+			-- docs/ardour-plan.md). gfx-limiter de golem-fx, en mode SANS anticipation (latence 0, aucun échantillon
+			-- au-dessus du plafond, transparent en dessous), réglé comme golem_safety : −1 dBFS, relâchement 15 ms, style
+			-- clean, relâchement fixe. Le Lua reste le repli si le plugin manque.
+			local sp = ARDOUR.LuaAPI.new_plugin (Session, SAFETY_VST3, ARDOUR.PluginType.VST3, "")
+			if not sp:isnil () then
+				r:add_processor_by_index (sp, -1, nil, true)
+				set_params ({ proc = sp, spec = { id = "safety" } }, SAFETY_PARAMS)
+			else
+				log ("  ⚠ " .. spec.name .. " : gfx-limiter absent — limiteur de sécurité en Lua (plus coûteux)")
+				sp = ARDOUR.LuaAPI.new_luaproc (Session, "golem Safety")
+				if sp:isnil () then log ("  ⚠ " .. spec.name .. " : limiteur golem Safety introuvable (ARDOUR_DATA_PATH)")
+				else r:add_processor_by_index (sp, -1, nil, true) end
+			end
 		end
 		if spec.kind == "midi" then
 			local dev = spec.midi and spec.midi.device
@@ -668,11 +696,14 @@ local function dump ()
 		while true do
 			local pr = r:nth_plugin (i2)
 			if pr:isnil () then break end
-			if pr:display_name () == "golem Safety" then safety = true end
+			local dn = pr:display_name ()
+			if dn == "golem Safety" then safety = "lua"
+			elseif dn:find ("Limiter", 1, true) and i2 == r_last_plugin (r) then safety = "gfx-limiter" end
 			i2 = i2 + 1
 		end
 		tracks[#tracks + 1] = { ssid = INPUT_METERS + i, name = name, safety = safety, mute = r:mute_control ():get_value () > 0.5,
 			gain_db = ARDOUR.DSP.accurate_coefficient_to_dB (r:gain_control ():get_value ()),
+			trim_db = ARDOUR.DSP.accurate_coefficient_to_dB (r:trim_control ():get_value ()),
 			input = conn_in, output = conn_out }
 	end
 	local blocks = {}
