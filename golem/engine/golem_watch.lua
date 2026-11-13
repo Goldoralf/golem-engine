@@ -517,6 +517,24 @@ local function materialize (plan)
 			local p, n2 = add_block (r, bs, nch)
 			if n2 then nch = n2 end                    -- un plugin absent ne change rien aux canaux
 			if p and bs.init then set_params ({ proc = p, spec = bs }, bs.init) end   -- golem_rig FX_INIT
+			-- LA CLÉ d'un gate à clé (Met, le gate de golem-fx ; golem docs/golem-fx-sheet.md §4) : le sidechain du
+			-- plugin, relié à l'entrée de la carte de la lane — le DI brut, pas ce qui sort de l'ampli. Sans clé reliée,
+			-- Met écoute son entrée principale.
+			if p and bs.key_input then
+				if not r:add_sidechain (p) then
+					log ("  ⚠ " .. tostring (bs.id) .. " : sidechain refusé (prise en cours ?) — le gate écoute son entrée")
+				elseif not ins[bs.key_input] then
+					log ("  ⚠ " .. tostring (bs.id) .. " : pas d'entrée " .. tostring (bs.key_input) .. " sur la carte pour la clé")
+				else
+					local sc = p:to_insert ():sidechain_input ()
+					local n = sc:n_ports ():n_audio ()
+					for c = 0, n - 1 do
+						local rc = sc:audio (c):connect (ins[bs.key_input])
+						if rc ~= 0 then log ("  lien de clé refusé " .. tostring (bs.id) .. " (" .. tostring (rc) .. ")") end
+					end
+					log ("  " .. tostring (bs.id) .. " : clé <- entrée " .. tostring (bs.key_input) .. " (" .. n .. " canal/canaux)")
+				end
+			end
 			if p and bs.drumtrans and not write_drumtrans (p, bs.drumtrans) then
 				log ("  ⚠ " .. tostring (bs.id) .. " : table du traducteur non posée (notes du module telles quelles)")
 			end
@@ -663,7 +681,18 @@ local function dump ()
 		for _, p in ipairs (plugin_params (b.proc:to_insert ():plugin (0))) do
 			vals[p.label] = ARDOUR.LuaAPI.get_processor_param (b.proc, p.i, true)
 		end
-		blocks[id] = { ssid = b.ssid, fx = b.fx, enabled = b.proc:to_insert ():enabled (), params = vals }
+		-- la clé d'un gate à clé : à quoi son sidechain est relié (les entrées de la carte)
+		local key = array ()
+		local pi = b.proc:to_insert ()
+		if pi:has_sidechain () then
+			local sc = pi:sidechain_input ()
+			for c = 0, sc:n_ports ():n_audio () - 1 do
+				for _, other in ipairs (physical (true)) do
+					if sc:audio (c):connected_to (other) then key[#key + 1] = other end
+				end
+			end
+		end
+		blocks[id] = { ssid = b.ssid, fx = b.fx, enabled = pi:enabled (), params = vals, key = key }
 	end
 	write_file (DUMP, json_encode ({ preset = RIG.preset or "", tracks = tracks, blocks = blocks, at = os.time () }))
 end
