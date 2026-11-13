@@ -787,6 +787,29 @@ local ACTIONS = {
 		write_file (SNAPSHOT, json_encode ({ name = name, dir = Session:path (), preset = RIG.preset or "", at = os.time () }))
 		log ("  état « " .. name .. " » sauvé pour le banc")
 	end,
+	-- QUI COÛTE (diagnostic, 2026-11-13 : 92 % de charge DSP à 192 échantillons, des décrochages que REAPER n'a pas) :
+	-- le temps de calcul de CHAQUE plugin, mesuré par Ardour (PluginInsert:get_stats, µs par cycle), route par route.
+	dspstats = function (c)
+		local out = { at = os.time (), buffer = Session:get_block_size (), routes = {} }
+		for r in Session:get_routes ():iter () do
+			local procs = {}
+			local i = 0
+			while true do
+				local p = r:nth_processor (i)
+				if p:isnil () then break end
+				local ins = p:to_insert ()
+				if not ins:isnil () then
+					local ok, v = ins:get_stats (0, 0, 0, 0)
+					procs[#procs + 1] = { name = p:display_name (), ok = ok and true or false,
+						min = v and v[1] or 0, max = v and v[2] or 0, avg = v and v[3] or 0 }
+				end
+				i = i + 1
+			end
+			out.routes[#out.routes + 1] = { name = r:name (), active = r:active (), procs = procs }
+		end
+		write_file (ROOT .. "/presets/.engine-dspstats.json", json_encode (out))
+		log ("  dspstats : " .. #out.routes .. " route(s)")
+	end,
 }
 
 local function run (cmd)
