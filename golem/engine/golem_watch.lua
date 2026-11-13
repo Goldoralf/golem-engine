@@ -172,6 +172,7 @@ local SNAPSHOT = ROOT .. "/presets/.engine-snapshot.json"   -- la commande `snap
 local NG = PBD.GroupControlDisposition.NoGroup
 local BACKEND_PTR = nil                -- le backend (open_session) : les claviers s'y ouvrent à la demande
 local MIDI_PORTS = {}                  -- appareil MIDI ouvert -> ses ports de capture (system:midi_capture_…)
+local GONE = 0                         -- compteur des routes retirées (clear_routes : un nom unique avant le retrait)
 local RIG = { preset = nil, routes = {}, order = {}, blocks = {}, nch = {} }   -- blocks[id] = {route, proc, ssid, fx, spec}
 
 local function read_json (path)
@@ -338,6 +339,14 @@ local function clear_routes ()
 	for r in Session:get_routes ():iter () do
 		if not r:is_master () and not r:is_monitor () and not r:is_auditioner ()
 		   and not r:name ():find ("^golem:in%d") then rl:push_back (r) end
+	end
+	-- RENOMMÉES AVANT D'ÊTRE RETIRÉES : la surface OSC garde ses strips (shared_ptr) jusqu'à son prochain recalcul de
+	-- banques ; la route survit, ses PORTS aussi, et recréer une route du même nom échouait (« Port already exists »,
+	-- un rebuild sur deux en éditant un patch, mesuré 2026-11-13). Un nom unique libère les noms de ports tout de suite
+	-- (set_name est virtuel : une piste renomme aussi sa playlist).
+	for r in rl:iter () do
+		GONE = GONE + 1
+		r:set_name ("golem-gone-" .. GONE)
 	end
 	if rl:size () > 0 then Session:remove_routes (rl) end
 	-- LES RÉFÉRENCES LÂCHÉES TOUT DE SUITE : le Lua tenait encore les routes et les plugins supprimés (shared_ptr) ; ils
