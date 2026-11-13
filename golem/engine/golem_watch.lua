@@ -173,7 +173,7 @@ local NG = PBD.GroupControlDisposition.NoGroup
 local BACKEND_PTR = nil                -- le backend (open_session) : les claviers s'y ouvrent à la demande
 local MIDI_PORTS = {}                  -- appareil MIDI ouvert -> ses ports de capture (system:midi_capture_…)
 local GONE = 0                         -- compteur des routes retirées (clear_routes : un nom unique avant le retrait)
-local RIG = { preset = nil, routes = {}, order = {}, blocks = {}, nch = {} }   -- blocks[id] = {route, proc, ssid, fx, spec}
+local RIG = { preset = nil, routes = {}, order = {}, blocks = {}, nch = {}, asleep = {} }   -- blocks[id] = {route, proc, ssid, fx, spec}
 
 local function read_json (path)
 	local s = read_file (path)
@@ -370,7 +370,7 @@ local function clear_routes ()
 	-- n'étaient détruits qu'au passage du ramasse-miettes, n'importe quand plus tard (pendant le décodage d'une commande),
 	-- alors que la surface OSC ou le fil audio pouvaient encore les voir. Les scripts d'Ardour font ainsi.
 	rl = nil
-	RIG = { preset = nil, routes = {}, order = {}, blocks = {}, nch = {} }
+	RIG = { preset = nil, routes = {}, order = {}, blocks = {}, nch = {}, asleep = {} }
 	collectgarbage ()
 	collectgarbage ()
 end
@@ -455,15 +455,42 @@ local function set_tempo (bpm)
 	log ("  tempo <- " .. bpm .. " BPM")
 end
 
+-- LA BRANCHE QUE LA SCÈNE COUPE, ENDORMIE (2026-11-13, golem docs/ardour-plan.md) : un mute laisse Ardour calculer
+-- ses plugins — l'ampli NAM d'une branche muette coûtait autant que celui qui joue. Endormie = ses plugins désactivés
+-- APRÈS le mute ; réveillée = réactivés AVANT le dé-mute. Le prix possible : un trou ou un claquement au retour (NAM et
+-- queues de reverb repartent à froid) — d'où l'interrupteur, ÉTEINT tant que le banc des trous de scène n'a pas tranché :
+-- config/golem-engine.json « sleep_muted_branches »: true (relu à chaque scène).
+local function sleep_muted ()
+	local cfg = read_json_early (AUDIO_CFG)
+	return cfg and cfg.sleep_muted_branches == true
+end
+local function route_plugins (r, on)
+	local i = 0
+	while true do
+		local p = r:nth_plugin (i)
+		if p:isnil () then break end
+		if on then p:activate () else p:deactivate () end
+		i = i + 1
+	end
+	return i
+end
+
 local function apply_state (plan)
 	-- l'état d'une scène sur un rig déjà posé : enable, mute, paramètres, gains. Aucun plugin ajouté ni retiré.
 	set_tempo (plan.bpm)
 	local missing = 0
+	local sleep = sleep_muted ()
 	for _, spec in ipairs (plan.tracks or {}) do
 		local r = RIG.routes[spec.name]
 		if not r then
 			missing = missing + 1
 		else
+			local asleep = sleep and spec.role == "branch" and spec.mute == true
+			if not asleep and RIG.asleep[spec.name] then          -- réveillée AVANT d'être rendue audible
+				route_plugins (r, true)
+				RIG.asleep[spec.name] = nil
+				log ("  " .. spec.name .. " : branche réveillée")
+			end
 			r:mute_control ():set_value (spec.mute and 1 or 0, NG)
 			r:gain_control ():set_value (ARDOUR.DSP.dB_to_coefficient (spec.gain_db or 0), NG)
 			-- le gain du merge AVANT ses plugins (le trim d'Ardour est en tête de route ; REAPER : un Volume Adjustment en
@@ -476,6 +503,11 @@ local function apply_state (plan)
 					set_params (b, bs.params)
 					b.proc:to_insert ():enable (bs.enabled ~= false)
 				end
+			end
+			if asleep then                                      -- APRÈS le mute et les enable (un enable réactive)
+				local n = route_plugins (r, false)
+				if not RIG.asleep[spec.name] then log ("  " .. spec.name .. " : branche muette endormie (" .. n .. " plugin(s))") end
+				RIG.asleep[spec.name] = true
 			end
 		end
 	end
@@ -704,6 +736,7 @@ local function dump ()
 		tracks[#tracks + 1] = { ssid = INPUT_METERS + i, name = name, safety = safety, mute = r:mute_control ():get_value () > 0.5,
 			gain_db = ARDOUR.DSP.accurate_coefficient_to_dB (r:gain_control ():get_value ()),
 			trim_db = ARDOUR.DSP.accurate_coefficient_to_dB (r:trim_control ():get_value ()),
+			asleep = RIG.asleep[name] == true,
 			input = conn_in, output = conn_out }
 	end
 	local blocks = {}
@@ -723,7 +756,7 @@ local function dump ()
 				end
 			end
 		end
-		blocks[id] = { ssid = b.ssid, fx = b.fx, enabled = pi:enabled (), params = vals, key = key }
+		blocks[id] = { ssid = b.ssid, fx = b.fx, enabled = pi:enabled (), active = b.proc:active (), params = vals, key = key }
 	end
 	write_file (DUMP, json_encode ({ preset = RIG.preset or "", tracks = tracks, blocks = blocks, at = os.time () }))
 end
