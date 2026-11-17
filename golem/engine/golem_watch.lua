@@ -2655,7 +2655,10 @@ local function perf_finalize ()
 		if f then f:close () else py = "python3" end
 	end
 	local function q (x) return "'" .. tostring (x):gsub ("'", "'\\''") .. "'" end
-	os.execute (string.format ("nohup %s %s %s >> %s 2>&1 &", q (py), q (script), q (TAKE), q (ROOT .. "/presets/.engine-take.log")))
+	-- l'assembleur (python, ffmpeg) est un programme DU SYSTÈME : il retrouve le chemin de bibliothèques d'avant le
+	-- moteur (golem/dev/env.sh GOLEM_ENGINE_HOST_LD), jamais celles du moteur
+	os.execute (string.format ("LD_LIBRARY_PATH=%s nohup %s %s %s >> %s 2>&1 &", q (os.getenv ("GOLEM_ENGINE_HOST_LD") or ""),
+		q (py), q (script), q (TAKE), q (ROOT .. "/presets/.engine-take.log")))
 	log ("prise : " .. #tracks .. " piste(s) écrite(s), assembleur lancé")
 end
 

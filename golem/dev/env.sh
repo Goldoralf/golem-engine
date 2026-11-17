@@ -3,7 +3,27 @@ TOP="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 libs=$TOP/build/libs
 # le PAQUET (golem/tools/bundle.py) a la forme de l'arbre de dev, plus `deps/` : les bibliothèques du système qu'il
 # emporte — après les nôtres, avant celles de la machine
-deps=""; [ -d "$TOP/deps" ] && deps="$TOP/deps:"
+# ⚠ SEULEMENT CELLES QUE LA MACHINE N'A PAS. Tout `deps/` devant le système imposait NOS versions (celles de la
+# distribution de construction, la plus vieille) à tout ce qui tourne dans le moteur ou qu'il lance : un ffmpeg du
+# système mourait sur « undefined symbol: g_task_set_static_name » (notre glib 2.72 sous son gdk-pixbuf), et un plugin
+# de l'utilisateur lié à une bibliothèque récente aurait fait de même (mesuré 2026-11-18, paquet construit sur 22.04,
+# joué sur 24.04). Une bibliothèque du système de même nom est au moins aussi récente que la nôtre : elle gagne ; les
+# nôtres ne comblent que les trous. La liste est refaite quand le cache de l'éditeur de liens change.
+GOLEM_ENGINE_HOST_LD="${LD_LIBRARY_PATH:-}"; export GOLEM_ENGINE_HOST_LD   # ce qu'un programme lancé par le moteur retrouve
+deps=""
+if [ -d "$TOP/deps" ]; then
+  act="${XDG_CACHE_HOME:-$HOME/.cache}/golem-engine/deps-$(cat "$TOP/VERSION" 2>/dev/null || echo dev)"
+  if [ ! -d "$act" ] || [ /etc/ld.so.cache -nt "$act" ] || [ "$TOP/deps" -nt "$act" ]; then
+    have="$( (/sbin/ldconfig -p 2>/dev/null || ldconfig -p 2>/dev/null) | awk '{print $1}' | sort -u)"
+    tmp="$act.$$"; rm -rf "$tmp"; mkdir -p "$tmp"
+    for f in "$TOP"/deps/*; do
+      n="$(basename "$f")"
+      grep -qxF "$n" <<<"$have" || ln -s "$f" "$tmp/$n"
+    done
+    rm -rf "$act"; mv "$tmp" "$act" 2>/dev/null || rm -rf "$tmp"
+  fi
+  deps="$act:"
+fi
 export LD_LIBRARY_PATH="$(find "$libs" -name '*.so*' -printf '%h\n' | sort -u | tr '\n' ':')${deps}${LD_LIBRARY_PATH:-}"
 export ARDOUR_SURFACES_PATH=$libs/surfaces/osc:$libs/surfaces/mcp_http:$libs/surfaces/websockets:$libs/surfaces/generic_midi
 export ARDOUR_PANNER_PATH=$libs/panners
