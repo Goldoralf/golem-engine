@@ -34,3 +34,13 @@ Patches to upstream files (keep this list short; budget 10):
 | `libs/ardour/midi_track.cc`, `libs/ardour/plugin.cc`: a transport stop or locate no longer sends all-notes-off nor resolves plugin MIDI when `ARDOUR_MIDI_KEEP_NOTES_ON_TRANSPORT` is set | `[headless]` | The engine hosts instruments played live: notes come from a keyboard, a pad or a foot switch, not from the timeline. Starting or stopping a take, or seeking in a backing track, cut a held chord or a ringing sample (set by `golem/engine/run.sh`) |
 
 Build (binaries `golem-engine9-*`, config `~/.config/golem-engine9`): `./waf configure --program-name="Golem Engine" --with-backends=alsa,dummy --optimize && ./waf build`.
+
+## The package (`golem/tools/bundle.py`)
+
+`python3 golem/tools/bundle.py` (after `./waf build`) writes `build/bundle/golem-engine-<version>-linux-<arch>.tar.gz`
+and its `.sha256`: what golem's installer downloads and places in `~/opt/golem-engine` (golem `docs/install-v2.md`).
+It keeps the shape of this tree (`build/libs/…`, `build/luasession/luasession`, `golem/engine/run.sh`, `share/`) and
+adds `deps/` (system libraries, without glibc, ALSA, udev and the C++ runtime), `VERSION`, `SOURCES` (the exact
+commit) and `COPYING`. `golem/dev/env.sh` adds `deps/` to the library path when it exists, and an installed package
+(a `VERSION` file) keeps its configuration in `~/.config`, never in its own folder. Build it on the oldest
+distribution to support: the package needs at least the glibc it was built with.
