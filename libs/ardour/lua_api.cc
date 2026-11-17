@@ -28,6 +28,7 @@
 #include "ardour/audioengine.h"
 #include "ardour/audiofilesource.h"
 #include "ardour/audiosource.h"
+#include "ardour/audioregion.h"
 #include "ardour/internal_send.h"
 #include "ardour/lua_api.h"
 #include "ardour/luaproc.h"
@@ -35,10 +36,13 @@
 #include "ardour/plugin.h"
 #include "ardour/plugin_insert.h"
 #include "ardour/plugin_manager.h"
+#include "ardour/playlist.h"
 #include "ardour/readable.h"
 #include "ardour/region_factory.h"
 #include "ardour/simple_export.h"
 #include "ardour/source_factory.h"
+#include "ardour/srcfilesource.h"
+#include "ardour/track.h"
 #include "ardour/uri_map.h"
 
 #include "LuaBridge/LuaBridge.h"
@@ -118,6 +122,61 @@ ARDOUR::LuaAPI::new_luaproc_with_time_domain (Session *s, const string& name, Te
 
 	/* Lua processor takes time domain from session */
 	return std::shared_ptr<Processor> (new PluginInsert (*s, *s, p));
+}
+
+/* [golem] a backing stem on a track: an EXTERNAL source (no copy, no conversion — Ardour resamples
+ * on the fly, reads mp3), one region of the whole file, no fades (stems must sum back to the mix). */
+std::shared_ptr<Region>
+ARDOUR::LuaAPI::place_audio_file (Session* s, std::shared_ptr<Route> r, const std::string& path, samplepos_t position)
+{
+	std::shared_ptr<Track> t = std::dynamic_pointer_cast<Track> (r);
+	if (!s || !t) {
+		return std::shared_ptr<Region> ();
+	}
+	SoundFileInfo info;
+	std::string   err;
+	if (!AudioFileSource::get_soundfile_info (path, info, err) || info.channels < 1) {
+		PBD::warning << string_compose (_("golem: cannot read audio file %1 (%2)"), path, err) << endmsg;
+		return std::shared_ptr<Region> ();
+	}
+	SourceList srcs;
+	try {
+		for (uint16_t ch = 0; ch < info.channels; ++ch) {
+			std::shared_ptr<Source> src = SourceFactory::createExternal (DataType::AUDIO, *s, path, ch, Source::Flag (0), true, true);
+			if (!src) {
+				return std::shared_ptr<Region> ();
+			}
+			/* a file at another rate than the session's (44.1 kHz stems in a 48 kHz session) is NOT
+			 * resampled by an external source: it would play too fast and too high. Wrap it in the
+			 * on-the-fly resampler the auditioner uses. */
+			std::shared_ptr<AudioFileSource> afs = std::dynamic_pointer_cast<AudioFileSource> (src);
+			if (afs && afs->sample_rate () != s->sample_rate ()) {
+				src = std::shared_ptr<Source> (new SrcFileSource (*s, afs, SrcGood));
+			}
+			srcs.push_back (src);
+		}
+	} catch (failed_constructor& e) {
+		PBD::warning << string_compose (_("golem: cannot open audio file %1"), path) << endmsg;
+		return std::shared_ptr<Region> ();
+	}
+	PBD::PropertyList plist;
+	plist.add (ARDOUR::Properties::start, timepos_t (Temporal::AudioTime));
+	plist.add (ARDOUR::Properties::length, srcs.front ()->length ());
+	plist.add (ARDOUR::Properties::name, PBD::basename_nosuffix (path));
+	plist.add (ARDOUR::Properties::whole_file, true);
+	std::shared_ptr<Region> whole = RegionFactory::create (srcs, plist);
+	plist.remove (ARDOUR::Properties::whole_file);
+	std::shared_ptr<Region> region = RegionFactory::create (whole, plist);
+	if (std::shared_ptr<AudioRegion> ar = std::dynamic_pointer_cast<AudioRegion> (region)) {
+		ar->set_fade_in_active (false);
+		ar->set_fade_out_active (false);
+	}
+	std::shared_ptr<Playlist> pl = t->playlist ();
+	if (!pl || !region) {
+		return std::shared_ptr<Region> ();
+	}
+	pl->add_region (region, timepos_t (position));
+	return region;
 }
 
 std::shared_ptr<Processor>

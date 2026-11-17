@@ -1674,7 +1674,10 @@ VST3PI::restartComponent (int32 flags)
 		 */
 		Stripable* s = dynamic_cast<Stripable*> (_owner);
 		if (s) {
-			s->session ().butler ()->delegate ([this]() { deactivate(); activate (); } );
+			/* [golem] with the process lock: the butler thread re-activated the component while the audio
+			 * thread was inside process() — a plugin that guards its state (nih-plug: "already mutably
+			 * borrowed") aborts the whole engine. connect_and_run() try-locks and skips that cycle. */
+			s->session ().butler ()->delegate ([this]() { PBD::Mutex::Lock pl (_process_lock); deactivate(); activate (); } );
 		}
 	}
 	if (flags & Vst::kIoTitlesChanged) {

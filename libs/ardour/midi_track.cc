@@ -35,6 +35,8 @@
 #define isnan_local std::isnan
 #endif
 
+#include <glib.h>
+
 #include "pbd/enumwriter.h"
 #include "pbd/types_convert.h"
 #include "evoral/midi_util.h"
@@ -1025,6 +1027,14 @@ MidiTrack::realtime_handle_transport_stopped ()
 {
 	Route::realtime_handle_transport_stopped ();
 	_disk_reader->resolve_tracker (_immediate_events, 0);
+
+	/* [golem][headless] a live instrument host: notes come from a keyboard, a pad or a foot switch,
+	 * not from the timeline. Stopping the transport (the end of a take, of a backing track) must
+	 * not silence a held organ chord or a sample that is still ringing. */
+	static const bool keep_live_notes = g_getenv ("ARDOUR_MIDI_KEEP_NOTES_ON_TRANSPORT") != 0;
+	if (keep_live_notes) {
+		return;
+	}
 
 	for (uint8_t channel = 0; channel <= 0xF; channel++) {
 

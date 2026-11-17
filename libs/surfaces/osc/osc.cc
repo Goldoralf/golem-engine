@@ -184,7 +184,19 @@ OSC::start ()
 		return 0;
 	}
 
-	for (int j=0; j < 20; ++j) {
+	/* [golem][headless] a second engine started next to the one that plays (a bench) must not take the
+	 * next free port silently: its bridge would then talk to the engine that plays. ARDOUR_OSC_PORT names
+	 * the port; with it set there is no fallback to the next one. */
+	int tries = 20;
+	if (const char* want = g_getenv ("ARDOUR_OSC_PORT")) {
+		const int v = atoi (want);
+		if (v > 1023 && v < 65536) {
+			_port = v;
+			tries = 1;
+		}
+	}
+
+	for (int j=0; j < tries; ++j) {
 		snprintf(tmpstr, sizeof(tmpstr), "%d", _port);
 
 		//if ((_osc_server = lo_server_new_with_proto (tmpstr, LO_TCP, error_callback))) {

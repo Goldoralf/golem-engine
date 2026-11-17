@@ -20,10 +20,16 @@ LUA="$TOP/build/luasession/luasession"
 # libs/surfaces/osc/osc.cc). Le port lui-même écoute sur toutes les interfaces (liblo 0.31 ne sait pas lier une seule
 # adresse en UDP) : c'est le pare-feu de golem (provision/harden.sh : deny in) qui le ferme.
 export ARDOUR_OSC_NO_ZEROCONF=1
+# le port de la surface OSC : 3819 par défaut ; un banc lancé à côté du moteur qui joue en nomme un autre
+# (GOLEM_ENGINE_OSC, lu aussi par le bridge) — sans ça il prenait 3820 en silence et SON bridge parlait au moteur du rack
+[ -n "${GOLEM_ENGINE_OSC:-}" ] && export ARDOUR_OSC_PORT="$GOLEM_ENGINE_OSC"
 # un appareil MIDI branché APRÈS le démarrage reste FERMÉ (patch [headless] du backend ALSA) : le veilleur n'ouvre que le
 # clavier d'une lane. Sans ça, Ardour s'abonnait au lecteur du pédalier du bridge (aseqdump) relancé après lui, et
 # chaque redémarrage du moteur coupait le pédalier un instant (mesuré 2026-11-12)
 export ARDOUR_ALSA_MIDI_NO_HOTPLUG_OPEN=1
+# un hôte d'instruments joués : l'arrêt ou le déplacement du transport (une prise, une backing) ne relâche pas les
+# notes tenues — un accord d'orgue, un sample qui sonne encore (patch du fork, golem/README.md)
+export ARDOUR_MIDI_KEEP_NOTES_ON_TRANSPORT=1
 # les NOMS DE PARAMÈTRES en anglais quelle que soit la langue du système : golem retrouve un potard par son nom
 # (catalogue) et lilv traduit les plugins (sfizz en français : « Polyphonie », « Nombre de régions »), mesuré 2026-11-12
 export LANG=C.UTF-8 LC_ALL=C.UTF-8

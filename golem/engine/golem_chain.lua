@@ -30,9 +30,31 @@ function M.go_stereo (route, proc)
 	while route:output ():n_ports ():n_audio () < 2 do route:output ():add_port ("", AUDIO) end
 end
 
--- ajoute `proc` en fin de chaîne de `route` dont le nombre de canaux est `nch` ; rend le nouveau nombre de canaux
+-- OÙ POSER UN PLUGIN : AVANT LE FADER. `add_processor_by_index (proc, -1)` l'ajoute « à la fin », c'est-à-dire APRÈS le
+-- fader : le niveau de scène et le trim du mixer (posés sur le fader) agissaient alors AVANT l'ampli — ils changeaient
+-- sa saturation, pas le volume (mesuré 2026-11-17 sur un NAM saturé : +6 dB demandés = -1,0 dB ; -12 dB = -1,1 dB), et
+-- le fader d'une piste d'instrument n'agissait sur rien. L'index est celui du fader parmi les processeurs VISIBLES
+-- (Route::before_processor_for_index) : le plugin se glisse juste devant lui, donc à la suite des précédents.
+function M.fader_index (route)
+	local i, visible = 0, 0
+	while true do
+		local p = route:nth_processor (i)
+		if p:isnil () then return -1 end              -- pas de fader trouvé : à la fin, comme avant
+		if p:display_name () == "Fader" then return visible end
+		if p:display_to_user () then visible = visible + 1 end
+		i = i + 1
+	end
+end
+
+-- pose `proc` avant le fader, à la suite des plugins déjà là
+function M.pre (route, proc)
+	return route:add_processor_by_index (proc, M.fader_index (route), nil, true)
+end
+
+-- ajoute `proc` en fin de chaîne (avant le fader) de `route` dont le nombre de canaux est `nch` ; rend le nouveau nombre
+-- de canaux
 function M.add (route, proc, nch)
-	route:add_processor_by_index (proc, -1, nil, true)
+	M.pre (route, proc)
 	if nch < 2 and M.is_stereo (proc) then
 		M.go_stereo (route, proc)
 		return 2

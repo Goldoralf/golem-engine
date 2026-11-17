@@ -31,6 +31,7 @@
 #include <string>
 
 #include <cstdlib>
+#include <glib.h>
 #include <cstdio> // so libraptor doesn't complain
 #include <cmath>
 #ifndef COMPILER_MSVC
@@ -453,7 +454,10 @@ Plugin::realtime_handle_transport_stopped ()
 void
 Plugin::realtime_locate (bool for_loop_end)
 {
-	if (!for_loop_end) {
+	/* [golem][headless] see MidiTrack::realtime_handle_transport_stopped: a locate (the start of a
+	 * take, a seek in a backing track) must not release the notes a musician is holding. */
+	static const bool keep_live_notes = g_getenv ("ARDOUR_MIDI_KEEP_NOTES_ON_TRANSPORT") != 0;
+	if (!for_loop_end && !keep_live_notes) {
 		_resolve_midi = true;
 	}
 }

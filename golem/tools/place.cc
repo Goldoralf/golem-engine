@@ -13,6 +13,9 @@
  *                 monitoring d'ENTRÉE (la carte), un export n'entendrait rien ;
  *   --to-master   les sorties de ces routes vont au master (le veilleur les relie à la carte, l'export rend le master) :
  *                 une sortie mono sur les deux entrées du master, comme la carte ; une stéréo canal par canal.
+ * LA CLÉ DES GATES À CLÉ (2026-11-13, golem docs/golem-fx-sheet.md §4) : en --disk, un sidechain que le veilleur a relié
+ * à l'entrée de la carte de la piste (le DI) n'entendrait plus rien ; une piste « golem-key-di » joue la même DI depuis
+ * le disque, hors master, et nourrit ces sidechains — comme la carte le fait en jeu.
  */
 
 #include <algorithm>
@@ -28,6 +31,8 @@
 #include "ardour/audio_track.h"
 #include "ardour/io.h"
 #include "ardour/monitor_control.h"
+#include "ardour/plugin_insert.h"
+#include "ardour/route_group.h"
 #include "ardour/audioregion.h"
 #include "ardour/import_status.h"
 #include "ardour/location.h"
@@ -145,10 +150,61 @@ main (int argc, char* argv[])
 		range->set (timepos_t (0), timepos_t (end));
 	}
 
+	std::shared_ptr<AudioTrack> key;
 	if (disk) {
+		/* les ports de la carte que la piste écoutait : un sidechain qui y est relié est la CLÉ d'un gate (le DI) */
+		std::vector<std::string> card;
+		for (uint32_t i = 0; i < t->input ()->n_ports ().n_audio (); ++i) {
+			std::vector<std::string> c;
+			t->input ()->audio (i)->get_connections (c);
+			card.insert (card.end (), c.begin (), c.end ());
+		}
+		std::vector<std::shared_ptr<Port>> keys;
+		std::shared_ptr<RouteList const> rl = s->get_routes ();
+		for (auto const& ro : *rl) {
+			for (uint32_t k = 0;; ++k) {
+				std::shared_ptr<Processor> p = ro->nth_plugin (k);
+				if (!p) {
+					break;
+				}
+				std::shared_ptr<PluginInsert> pi = std::dynamic_pointer_cast<PluginInsert> (p);
+				if (!pi || !pi->sidechain_input ()) {
+					continue;
+				}
+				std::shared_ptr<IO> sc = pi->sidechain_input ();
+				for (uint32_t i = 0; i < sc->n_ports ().n_audio (); ++i) {
+					bool hit = false;
+					for (std::string const& c : card) {
+						if (sc->audio (i)->connected_to (c)) {
+							hit = true;
+						}
+					}
+					if (hit) {
+						sc->audio (i)->disconnect_all ();
+						keys.push_back (sc->audio (i));
+					}
+				}
+			}
+		}
 		/* écrit TOUT DE SUITE : set_value passe par la file temps réel, que rien ne vide ici (aucun cycle audio) */
 		t->monitoring_control ()->set_value_unchecked (MonitorDisk);
 		t->input ()->disconnect ();
+		if (!keys.empty ()) {
+			std::list<std::shared_ptr<AudioTrack>> made = s->new_audio_track (1, 1, nullptr, 1, "golem-key-di",
+				PresentationInfo::max_order, Normal, true);
+			if (!made.empty ()) {
+				key = made.front ();
+				key->input ()->disconnect ();
+				key->output ()->disconnect ();
+				key->monitoring_control ()->set_value_unchecked (MonitorDisk);
+				std::shared_ptr<Playlist> kpl = key->playlist ();
+				kpl->add_region (RegionFactory::create (whole, plist), timepos_t (0));
+				for (auto const& kp : keys) {
+					key->output ()->audio (0)->connect (kp->name ());
+				}
+				std::cout << "key: the DI feeds " << keys.size () << " sidechain port(s)\n";
+			}
+		}
 	}
 	std::shared_ptr<Route> master = s->master_out ();
 	for (std::string const& n : to_master) {
@@ -177,6 +233,7 @@ main (int argc, char* argv[])
 	whole.reset ();
 	status.sources.clear ();
 	master.reset ();
+	key.reset ();
 	t.reset ();
 	r.reset ();
 	SessionUtils::unload_session (s);

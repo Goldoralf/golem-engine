@@ -62,6 +62,21 @@ namespace ARDOUR { namespace LuaAPI {
 	 */
 	std::shared_ptr<Processor> new_send (Session* s, std::shared_ptr<ARDOUR::Route> r, std::shared_ptr<ARDOUR::Processor> p);
 
+	/** [golem] place an audio file on a track, WITHOUT importing it: the file stays where it is
+	 * (an external source, resampled on the fly if its rate differs, mp3 included), one region
+	 * of the whole file is added to the track's playlist at the given position.
+	 *
+	 * This is what a headless host needs to play backing stems: the GUI does it through
+	 * Editor::do_embed, which a Lua session does not have.
+	 *
+	 * @param s Session Handle
+	 * @param r an audio Track
+	 * @param path absolute path of the audio file
+	 * @param position where the region starts, in samples
+	 * @returns the region placed, or a nil region if the file cannot be read
+	 */
+	std::shared_ptr<ARDOUR::Region> place_audio_file (Session* s, std::shared_ptr<ARDOUR::Route> r, const std::string& path, samplepos_t position);
+
 	/** Create a null processor shared pointer
 	 *
 	 * This is useful for Track:bounce() to indicate no processing.
