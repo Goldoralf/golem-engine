@@ -2531,6 +2531,16 @@ local function perf_start (c)
 				end
 			end
 		end
+		-- UNE DI À LA DEMANDE (golem bridge/di_record.py, `di_record` dans presets/.perfsrc.json) : l'entrée demandée
+		-- est prise BRUTE même si aucune lane du rig ne la joue — c'est le signal du musicien qu'on veut, pas un patch
+		if src.di_record == true then
+			for k, v in pairs (src) do
+				local n = tonumber (tostring (k):match ("^in(%d+)$"))
+				if n and v == true and n <= N_IN and not REC.tracks["DI-Sandbox-Input-" .. n] then
+					REC.tracks["DI-Sandbox-Input-" .. n] = rec_entry ("DI-Sandbox-Input-" .. n, 1, { di = n })
+				end
+			end
+		end
 	end
 	rec_link ()
 	for _, t in pairs (REC.tracks) do t.route:rec_enable_control ():set_value (1, NG) end
