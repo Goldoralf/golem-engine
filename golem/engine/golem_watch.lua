@@ -182,7 +182,7 @@ local function status ()
 		dsp_load = AudioEngine:get_dsp_load (), xruns = xruns_now (), xruns_all = Session:get_xrun_count (),
 		tracks = Session:get_tracks ():size (), rolling = Session:transport_rolling (), at = os.time (),
 		device = DEVICE_OPEN, inputs = N_IN, outputs = N_OUT, midi_in = MIDI_IN, midi_out = MIDI_OUT,
-		midi_clock = (function () local ok, v = pcall (function () return CLOCK.state () end); return ok and v or nil end) (),
+		midi_clock = (function () local ok, v = pcall (function () return MIDICLOCK.state () end); return ok and v or nil end) (),
 	}
 end
 
@@ -202,7 +202,10 @@ local GONE = 0                         -- compteur des routes retirées (clear_r
 local RIG = { preset = nil, routes = {}, order = {}, blocks = {}, nch = {}, asleep = {}, specs = {}, mixer = {}, rec_before = 0 }
 -- L'HORLOGE MIDI (sa section plus bas) : une table GLOBALE — le fichier est à la limite des 200 locales de Lua.
 -- `ports[appareil]` = ses ports de SORTIE, relevés quand midi_device_ports ouvre un clavier.
-CLOCK = { route = nil, proc = nil, bpm = 120, ports = {}, linked = "" }
+-- ⚠ SON NOM N'EST PAS « CLOCK » : `local CLOCK` (plus haut) est le chemin du TÉMOIN du fil audio (presets/.clock.json).
+-- La table de l'horloge MIDI s'appelait ainsi et l'écrasait : plus de témoin, donc plus de détection ni de réparation
+-- d'un son coupé — le rack est resté muet une nuit (2026-11-18) sans que golem le voie.
+MIDICLOCK = { route = nil, proc = nil, bpm = 120, ports = {}, linked = "" }
 local INPUT_METERS_N                        -- défini avec les vumètres d'entrée, plus bas
 local REC_COUNT = function () return 0 end   -- le nombre de pistes de prise TEMPORAIRES vivantes (défini avec le service de prise)
 local REC_POOLED = function (name) return false end   -- cette route est-elle une piste de prise PERMANENTE ?
@@ -265,16 +268,16 @@ local function midi_device_ports (want)
 			end
 			if not cached or not be:midi_device_enabled (name) then
 				local before = physical_midi ()
-				local before_out = CLOCK.phys and CLOCK.phys () or {}
+				local before_out = MIDICLOCK.phys and MIDICLOCK.phys () or {}
 				be:set_midi_device_enabled (name, true)
 				local got = {}
 				for p in pairs (physical_midi ()) do if not before[p] then got[#got + 1] = p end end
 				MIDI_PORTS[name] = got
-				if CLOCK.phys then                           -- ses sorties : là où l'horloge MIDI ira (CLOCK.link)
+				if MIDICLOCK.phys then                           -- ses sorties : là où l'horloge MIDI ira (MIDICLOCK.link)
 					local outs = {}
-					for p in pairs (CLOCK.phys ()) do if not before_out[p] then outs[#outs + 1] = p end end
+					for p in pairs (MIDICLOCK.phys ()) do if not before_out[p] then outs[#outs + 1] = p end end
 					table.sort (outs)
-					CLOCK.ports[name] = outs
+					MIDICLOCK.ports[name] = outs
 				end
 				log ("  MIDI : " .. name .. " ouvert (" .. #got .. " port(s))")
 			end
@@ -604,7 +607,7 @@ local function set_tempo (bpm)
 	Temporal.TempoMap.update (tm)
 	log ("  tempo <- " .. bpm .. " BPM")
 	if CLICK_TEMPO then CLICK_TEMPO (bpm) end        -- le métronome compte au tempo du morceau
-	if CLOCK.tempo then CLOCK.tempo (bpm) end        -- l'horloge MIDI aussi : l'arpégiateur du clavier suit le preset
+	if MIDICLOCK.tempo then MIDICLOCK.tempo (bpm) end        -- l'horloge MIDI aussi : l'arpégiateur du clavier suit le preset
 	if DRUMS_TEMPO then DRUMS_TEMPO (bpm) end        -- la boîte à rythmes aussi
 	if STD_TEMPO then STD_TEMPO (bpm) end            -- et la grille d'un standard
 end
@@ -2334,7 +2337,7 @@ end
 -- BPM du preset. Sous REAPER la sortie est cherchée par nom (« MPK », « akai ») ; ici c'est le clavier de chaque lane
 -- MIDI, quel qu'il soit. Créée APRÈS les services et les pistes de prise : le rig compte ce qui le précède (RIG.base).
 do
-CLOCK.phys = function ()                            -- les ports MIDI physiques où le moteur ÉCRIT (vers un appareil)
+MIDICLOCK.phys = function ()                            -- les ports MIDI physiques où le moteur ÉCRIT (vers un appareil)
 	local out = {}
 	local _, t = AudioEngine:get_backend_ports ("", ARDOUR.DataType ("midi"),
 		ARDOUR.PortFlags.IsPhysical | ARDOUR.PortFlags.IsInput, C.StringVector ())
@@ -2342,50 +2345,50 @@ CLOCK.phys = function ()                            -- les ports MIDI physiques 
 	return out
 end
 
-CLOCK.ensure = function ()
+MIDICLOCK.ensure = function ()
 	local r = midi_track ("golem:clock", true)
 	local p = ARDOUR.LuaAPI.new_luaproc (Session, "golem Clock")
 	if p:isnil () then error ("golem Clock introuvable (ARDOUR_DATA_PATH)") end
 	CHAIN.pre (r, p)
-	CLOCK.route, CLOCK.proc, CLOCK.linked = r, p, ""
-	CLOCK.tempo (Temporal.TempoMap.read ():quarters_per_minute_at (Temporal.timepos_t (0)))
+	MIDICLOCK.route, MIDICLOCK.proc, MIDICLOCK.linked = r, p, ""
+	MIDICLOCK.tempo (Temporal.TempoMap.read ():quarters_per_minute_at (Temporal.timepos_t (0)))
 	log ("horloge MIDI : piste prête (24 tics par noire, transport arrêté)")
 end
 
-CLOCK.tempo = function (bpm)
-	CLOCK.bpm = tonumber (bpm) or CLOCK.bpm
-	if CLOCK.proc then
-		set_params ({ proc = CLOCK.proc, spec = { id = "clock" } }, { { pid = "bpm", label = "BPM", value = CLOCK.bpm } })
+MIDICLOCK.tempo = function (bpm)
+	MIDICLOCK.bpm = tonumber (bpm) or MIDICLOCK.bpm
+	if MIDICLOCK.proc then
+		set_params ({ proc = MIDICLOCK.proc, spec = { id = "clock" } }, { { pid = "bpm", label = "BPM", value = MIDICLOCK.bpm } })
 	end
 end
 
 -- relie la piste aux sorties des claviers ouverts ; refait seulement quand la liste change (un clavier branché,
 -- débranché, rouvert). Appelée par la boucle : rien à savoir du moment où un rappel ouvre un appareil.
-CLOCK.link = function ()
-	if not CLOCK.route then return end
-	local now, want = CLOCK.phys (), {}
-	for _, ports in pairs (CLOCK.ports) do
+MIDICLOCK.link = function ()
+	if not MIDICLOCK.route then return end
+	local now, want = MIDICLOCK.phys (), {}
+	for _, ports in pairs (MIDICLOCK.ports) do
 		for _, p in ipairs (ports) do if now[p] then want[#want + 1] = p end end
 	end
 	table.sort (want)
 	local sig = table.concat (want, "|")
-	if sig == CLOCK.linked then return end
-	CLOCK.route:output ():disconnect_all ()
+	if sig == MIDICLOCK.linked then return end
+	MIDICLOCK.route:output ():disconnect_all ()
 	local ok = 0
 	for _, p in ipairs (want) do
-		if CLOCK.route:output ():midi (0):connect (p) == 0 then ok = ok + 1 else log ("  horloge MIDI : lien refusé -> " .. p) end
+		if MIDICLOCK.route:output ():midi (0):connect (p) == 0 then ok = ok + 1 else log ("  horloge MIDI : lien refusé -> " .. p) end
 	end
-	CLOCK.linked = sig
+	MIDICLOCK.linked = sig
 	log ("horloge MIDI : " .. ok .. " sortie(s) de clavier reliée(s)" .. (ok > 0 and " (" .. sig .. ")" or ""))
 end
 
-CLOCK.state = function ()                           -- pour le battement : {ticks, bpm, ports}
-	if not CLOCK.proc then return nil end
-	local lp = CLOCK.proc:to_insert ():plugin (0):to_luaproc ()
+MIDICLOCK.state = function ()                           -- pour le battement : {ticks, bpm, ports}
+	if not MIDICLOCK.proc then return nil end
+	local lp = MIDICLOCK.proc:to_insert ():plugin (0):to_luaproc ()
 	if lp:isnil () then return nil end
 	local t = lp:shmem ():to_int (0):array ()
 	local n = 0
-	if CLOCK.linked ~= "" then for _ in CLOCK.linked:gmatch ("[^|]+") do n = n + 1 end end
+	if MIDICLOCK.linked ~= "" then for _ in MIDICLOCK.linked:gmatch ("[^|]+") do n = n + 1 end end
 	return { ticks = t[1], bpm = t[2] / 100, ports = n }
 end
 end
@@ -2648,17 +2651,24 @@ local function perf_finalize ()
 	REC.preview = nil
 	-- l'assembleur : celui que le bridge a nommé au départ de la prise (son Python, son fichier) ; à défaut, celui du
 	-- dépôt golem où tourne ce veilleur
-	local py, script = ROOT .. "/.venv/bin/python", ROOT .. "/bridge/engine/take_finalize.py"
+	local WINDOWS = package.config:sub (1, 1) == "\\"
+	local py, script = ROOT .. (WINDOWS and "/.venv/Scripts/python.exe" or "/.venv/bin/python"), ROOT .. "/bridge/engine/take_finalize.py"
 	if REC.finalizer and REC.finalizer[1] and REC.finalizer[2] then py, script = REC.finalizer[1], REC.finalizer[2]
 	else
 		local f = io.open (py, "r")
-		if f then f:close () else py = "python3" end
+		if f then f:close () else py = WINDOWS and "python" or "python3" end
 	end
 	local function q (x) return "'" .. tostring (x):gsub ("'", "'\\''") .. "'" end
 	-- l'assembleur (python, ffmpeg) est un programme DU SYSTÈME : il retrouve le chemin de bibliothèques d'avant le
 	-- moteur (golem/dev/env.sh GOLEM_ENGINE_HOST_LD), jamais celles du moteur
-	os.execute (string.format ("LD_LIBRARY_PATH=%s nohup %s %s %s >> %s 2>&1 &", q (os.getenv ("GOLEM_ENGINE_HOST_LD") or ""),
-		q (py), q (script), q (TAKE), q (ROOT .. "/presets/.engine-take.log")))
+	if WINDOWS then
+		-- pas de nohup ni de « & » : `start /b` détache ; les guillemets doubles de cmd.exe (un chemin n'en contient pas)
+		local function dq (x) return '"' .. tostring (x) .. '"' end
+		os.execute (string.format ('start "" /b %s %s %s >> %s 2>&1', dq (py), dq (script), dq (TAKE), dq (ROOT .. "/presets/.engine-take.log")))
+	else
+		os.execute (string.format ("LD_LIBRARY_PATH=%s nohup %s %s %s >> %s 2>&1 &", q (os.getenv ("GOLEM_ENGINE_HOST_LD") or ""),
+			q (py), q (script), q (TAKE), q (ROOT .. "/presets/.engine-take.log")))
+	end
 	log ("prise : " .. #tracks .. " piste(s) écrite(s), assembleur lancé")
 end
 
@@ -3281,14 +3291,15 @@ local function open_session ()
 	-- LE MIDI MATÉRIEL : le SÉQUENCEUR ALSA (partagé : le bridge garde ses ports), et AUCUN appareil ouvert au départ.
 	-- Par défaut Ardour ouvre tout : la prise DIN de la carte (le pédalier, au bridge), les ports virtuels du bridge
 	-- (« whammy », « input »). Seuls les claviers d'une lane MIDI s'ouvrent ensuite, un par un (midi_device_ports).
-	local pick, want, fallback = nil, os.getenv ("GOLEM_ENGINE_MIDI"), nil   -- un banc peut en forcer une
+	local pick, want, fallback, first_real = nil, os.getenv ("GOLEM_ENGINE_MIDI"), nil, nil   -- un banc peut en forcer une
 	for o in be:enumerate_midi_options ():iter () do
 		local l = o:lower ()
 		if want and o == want then pick = o; break end
 		if not want and l:find ("sequencer", 1, true) then pick = o end
-		if l == "none" or l:find ("no midi", 1, true) then fallback = o end
+		if l == "none" or l:find ("no midi", 1, true) then fallback = o
+		elseif not first_real then first_real = o end     -- hors ALSA (PortAudio, CoreAudio) : le MIDI du système
 	end
-	pick = pick or fallback
+	pick = pick or first_real or fallback
 	if pick then
 		be:set_midi_option (pick)
 		local n = 0
@@ -3420,7 +3431,7 @@ local function main ()
 	if not oklo then log ("ÉCHEC looper : " .. tostring (errlo)) end
 	local okrp, errrp = pcall (ensure_rec_pool)       -- EN DERNIER : les strips des services gardent leur rang
 	if not okrp then log ("ÉCHEC pistes de prise : " .. tostring (errrp)) end
-	local okck, errck = pcall (CLOCK.ensure)          -- après tout le reste : elle ne déplace le strip de personne
+	local okck, errck = pcall (MIDICLOCK.ensure)          -- après tout le reste : elle ne déplace le strip de personne
 	if not okck then log ("ÉCHEC horloge MIDI : " .. tostring (errck)) end
 	local osc = activate_osc ()
 	-- une commande posée AVANT ce process n'est jamais exécutée (même règle que golem_watch REAPER) : accusée seulement
@@ -3454,7 +3465,7 @@ local function main ()
 		end
 		if now_s () >= next_beat then                -- le battement : le bridge sait que le veilleur vit (talking)
 			next_beat = now_s () + 2.0
-			pcall (CLOCK.link)                        -- un clavier ouvert ou rouvert depuis : l'horloge le rejoint
+			pcall (MIDICLOCK.link)                        -- un clavier ouvert ou rouvert depuis : l'horloge le rejoint
 			pcall (function () write_file (STATUS, json_encode (status ())) end)
 		end
 		if now_s () >= next_clock then               -- le témoin du thread audio, au schéma de golem_clock.lua
