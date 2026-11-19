@@ -85,6 +85,17 @@ using namespace ArdourSurface;
 
 #include "pbd/abstract_ui.inc.cc" // instantiate template
 
+/* A short pause after each outgoing message lets other threads run during a burst of feedback.
+ * On Windows Glib::usleep(1) is a Sleep(1): at least a full timer tick (1 ms at best, 15.6 ms when
+ * the process is throttled), so a surface with meters on ~40 strips (~500 messages/s) spends all
+ * its time asleep and incoming commands wait up to several hundred milliseconds behind it.
+ * Sleep(0) only yields the rest of the time slice. */
+#ifdef PLATFORM_WINDOWS
+# define OSC_SEND_PAUSE() Glib::usleep (0)
+#else
+# define OSC_SEND_PAUSE() Glib::usleep (1)
+#endif
+
 #ifdef DEBUG
 static void error_callback(int num, const char *m, const char *path)
 {
@@ -6752,7 +6763,7 @@ OSC::float_message (string path, float val, lo_address addr)
 	lo_message_add_float (reply, (float) val);
 
 	lo_send_message (addr, path.c_str(), reply);
-	Glib::usleep(1);
+	OSC_SEND_PAUSE ();
 	lo_message_free (reply);
 	_lo_lock.unlock ();
 
@@ -6772,7 +6783,7 @@ OSC::float_message_with_id (std::string path, uint32_t ssid, float value, bool i
 	lo_message_add_float (msg, value);
 
 	lo_send_message (addr, path.c_str(), msg);
-	Glib::usleep(1);
+	OSC_SEND_PAUSE ();
 	lo_message_free (msg);
 	_lo_lock.unlock ();
 	return 0;
@@ -6788,7 +6799,7 @@ OSC::int_message (string path, int val, lo_address addr)
 	lo_message_add_int32 (reply, (float) val);
 
 	lo_send_message (addr, path.c_str(), reply);
-	Glib::usleep(1);
+	OSC_SEND_PAUSE ();
 	lo_message_free (reply);
 	_lo_lock.unlock ();
 
@@ -6808,7 +6819,7 @@ OSC::int_message_with_id (std::string path, uint32_t ssid, int value, bool in_li
 	lo_message_add_int32 (msg, value);
 
 	lo_send_message (addr, path.c_str(), msg);
-	Glib::usleep(1);
+	OSC_SEND_PAUSE ();
 	lo_message_free (msg);
 	_lo_lock.unlock ();
 	return 0;
@@ -6824,7 +6835,7 @@ OSC::text_message (string path, string val, lo_address addr)
 	lo_message_add_string (reply, val.c_str());
 
 	lo_send_message (addr, path.c_str(), reply);
-	Glib::usleep(1);
+	OSC_SEND_PAUSE ();
 	lo_message_free (reply);
 	_lo_lock.unlock ();
 
@@ -6845,7 +6856,7 @@ OSC::text_message_with_id (std::string path, uint32_t ssid, std::string val, boo
 	lo_message_add_string (msg, val.c_str());
 
 	lo_send_message (addr, path.c_str(), msg);
-	Glib::usleep(1);
+	OSC_SEND_PAUSE ();
 	lo_message_free (msg);
 	_lo_lock.unlock ();
 	return 0;

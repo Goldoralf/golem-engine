@@ -229,6 +229,35 @@ def scan_vst3(top, env, home=None):
     return n
 
 
+def no_power_throttling(pid):
+    """Windows 11 BRIDE un processus sans fenêtre visible (« power throttling ») : il ignore sa demande de résolution du
+    minuteur (timeBeginPeriod, posée par le backend) et peut le reléguer, EcoQoS, sur des cœurs lents à basse fréquence.
+    Mesuré 2026-11-19 : la surface OSC dort `Glib::usleep (1)` après CHAQUE message (osc.cc) — bridé, c'est un tic de
+    15,6 ms, 64 messages/s ; le premier envoi des strips (~700 messages) retenait les commandes 11 s, et le looper, le
+    transport, les niveaux arrivaient en retard ou jamais. Le moteur audio n'est jamais bridé : les deux bits sont
+    contrôlés, état 0. Rend False si Windows refuse — le moteur marche, en retard."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _State(ctypes.Structure):
+            _fields_ = [("Version", wintypes.ULONG), ("ControlMask", wintypes.ULONG), ("StateMask", wintypes.ULONG)]
+
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.OpenProcess.restype = wintypes.HANDLE
+        h = k.OpenProcess(0x0200, False, int(pid))                 # PROCESS_SET_INFORMATION
+        if not h:
+            return False
+        try:
+            # ProcessPowerThrottling (4) ; EXECUTION_SPEED (1) | IGNORE_TIMER_RESOLUTION (4) contrôlés, état 0 = jamais
+            st = _State(1, 0x1 | 0x4, 0)
+            return bool(k.SetProcessInformation(h, 4, ctypes.byref(st), ctypes.sizeof(st)))
+        finally:
+            k.CloseHandle(h)
+    except (OSError, AttributeError, ValueError):
+        return False
+
+
 def main(argv):
     if not argv:
         print("usage: run.py <golem-root> [session-dir] [backend] [device]", file=sys.stderr)
@@ -260,6 +289,9 @@ def main(argv):
                "-ex", "thread apply all bt 20", "--args", *cmd]
     if WIN:
         p = subprocess.Popen(cmd, env=env)
+        if not no_power_throttling(p.pid):
+            print("golem engine: Windows power throttling could not be lifted (OSC and timers may lag)",
+                  file=sys.stderr, flush=True)
         with open(pid_file, "w") as f:
             f.write(str(p.pid) + "\n")
         rc = p.wait()

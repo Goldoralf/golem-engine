@@ -2751,6 +2751,24 @@ local function perf_tick ()
 		end
 	end
 	if REC.stopping and now_s () >= REC.stopping then
+		-- PAS UN DÉLAI FIXE : à l'arrêt, Ardour ferme les fichiers de prise et pose les régions piste après piste. Sous
+		-- Windows c'est ~200 ms par piste (mesuré 2026-11-19 : Drums prête à 0,6 s, Sample, Mix puis Backing-Track à
+		-- 0,8, 1,0 et 1,2 s — elles manquaient à la prise). On attend que le transport soit arrêté et que chaque piste
+		-- AUDIO armée ait sa région ; une piste MIDI sans note n'en a jamais. Borné : 10 s après l'arrêt demandé.
+		REC.stop_deadline = REC.stop_deadline or (now_s () + 9.4)
+		local ready = not Session:transport_rolling ()
+		if ready then
+			for _, t in pairs (REC.tracks) do
+				if not t.midi then
+					local any = false
+					for _ in t.route:to_track ():playlist ():region_list ():iter () do any = true; break end
+					if not any then ready = false; break end
+				end
+			end
+		end
+		if not ready and now_s () < REC.stop_deadline then return end
+		if not ready then log ("prise : des pistes sans région 10 s après l'arrêt — la prise est close avec ce qu'elle a") end
+		REC.stop_deadline = nil
 		local ok, err = pcall (perf_finalize)
 		if not ok then
 			log ("ÉCHEC fin de prise : " .. tostring (err))
