@@ -14,7 +14,9 @@ io.stdout:setvbuf ("no")
 
 local ROOT, SESSION_DIR = arg[1], arg[2]
 -- la stéréo des chaînes : le module partagé avec le banc de parité de golem (tools/engine-render-case.lua)
-local HERE = debug.getinfo (1, "S").source:match ("^@(.*)/[^/]*$") or "."
+-- les DEUX séparateurs (2026-11-19, portage Windows) : le chemin du script y arrive en D:\…\golem_watch.lua, et le motif
+-- sur « / » seul rendait « . » — le veilleur mourait sur « cannot open ./golem_chain.lua »
+local HERE = debug.getinfo (1, "S").source:match ("^@(.*)[/\\][^/\\]*$") or "."
 local CHAIN = dofile (HERE .. "/golem_chain.lua")
 local BACKEND, DEVICE = arg[3] or "None (Dummy)", arg[4] or ""
 local CMD = ROOT .. "/presets/.command.json"
@@ -120,7 +122,15 @@ local function write_file (path, text)
 	local tmp = path .. ".tmp"
 	local f = assert (io.open (tmp, "w"))
 	f:write (text); f:close ()
-	os.rename (tmp, path)
+	if os.rename (tmp, path) then return end
+	-- WINDOWS (2026-11-19, portage) : rename() n'y REMPLACE pas un fichier existant — il échouait sans bruit, et chaque
+	-- témoin n'était écrit qu'UNE fois : accusés, état, horloge restaient figés, le bridge croyait toute commande sans
+	-- réponse. On ôte la cible puis on renomme ; un lecteur qui passe entre les deux voit « absent », comme avant la
+	-- première écriture (il relit au tour suivant).
+	os.remove (path)
+	if not os.rename (tmp, path) then
+		os.remove (tmp)
+	end
 end
 
 local function read_file (path)
@@ -321,6 +331,14 @@ end
 
 -- LE FICHIER D'UN BLOC EST-IL LU ? La propriété relue (NAM, zeroconvolv la renvoient) ; sinon le témoin de sortie du
 -- plugin (`loaded_output`, > 0 : sfizz ne renvoie jamais son .sfz, son « Number of regions » monte au chargement)
+-- UN MÊME FICHIER, DEUX ÉCRITURES (2026-11-19, portage Windows) : sous Windows un plugin peut rendre D:\a\b.nam quand le
+-- bridge a envoyé D:/a/b.nam, et la casse n'y distingue pas deux fichiers — ailleurs, l'égalité stricte comme avant
+local WINDOWS = package.config:sub (1, 1) == "\\"
+local function same_path (a, b)
+	if not WINDOWS then return a == b end
+	return a:gsub ("\\", "/"):lower () == b:gsub ("\\", "/"):lower ()
+end
+
 local function file_loaded (b, prop, path)
 	local w = b.spec.loaded_output
 	if w then
@@ -332,7 +350,7 @@ local function file_loaded (b, prop, path)
 		end
 		return false
 	end
-	return tostring (ARDOUR.LuaAPI.get_plugin_insert_property (b.proc:to_insert (), prop) or "") == path
+	return same_path (tostring (ARDOUR.LuaAPI.get_plugin_insert_property (b.proc:to_insert (), prop) or ""), path)
 end
 
 -- LE LIMITEUR DE SÉCURITÉ compilé : gfx-limiter (classe GoleMFxLimiter01), réglé comme golem_safety.jsfx
@@ -955,7 +973,7 @@ local function verify_files ()
 			if not file_loaded (b, prop, path) then
 				local kind = prop:find ("#ir", 1, true) and "ir" or "model"
 				issues[#issues + 1] = { track = b.route:name (), fx = b.fx, uri = prop, kind = kind,
-					expected = path:match ("[^/]+$") or path }
+					expected = path:match ("[^/\\]+$") or path }
 			end
 		end
 	end
@@ -3453,6 +3471,10 @@ local function main ()
 		if ok and type (c) == "table" and c.seq then
 			last = c.seq
 			write_file (ACK, json_encode ({ seq = last, t = now_s () }))
+			-- Windows : AUSSI l'accusé PAR SÉQUENCE que la file du bridge y lit (bridge/commands._ack_path) — voir la boucle
+			if package.config:sub (1, 1) == "\\" then
+				write_file (ACK .. "." .. string.format ("%.0f", last), json_encode ({ seq = last, t = now_s () }))
+			end
 		end
 	end
 	-- la ligne que monitors._watch_started_since cherche : le veilleur lit ses commandes
@@ -3470,6 +3492,13 @@ local function main ()
 			if ok and type (c) == "table" and c.seq and c.seq ~= last then
 				last = c.seq
 				write_file (ACK, json_encode ({ seq = last, t = now_s () }))
+				-- WINDOWS (2026-11-19, portage) : la file de commandes du bridge y lit un accusé PAR SÉQUENCE
+				-- (.command-ack.json.<seq>, bridge/commands._ack_path — le protocole du veilleur REAPER, né de ce que
+				-- rename() n'y remplace pas un fichier). Sans lui, chaque commande paraissait jamais lue : la file
+				-- attendait _HUNG_S (30 s) avant d'envoyer la suivante.
+				if package.config:sub (1, 1) == "\\" then
+					write_file (ACK .. "." .. string.format ("%.0f", last), json_encode ({ seq = last, t = now_s () }))
+				end
 				run (c)
 			end
 		end

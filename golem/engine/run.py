@@ -92,6 +92,12 @@ def engine_env(top, environ=None, home=None):
     if WIN or MAC:
         if os.path.isdir(j(top, "deps")):
             dirs.append(j(top, "deps"))
+        elif WIN:
+            # un ARBRE DE DEV Windows (golem/tools/win-build.sh) : ses bibliothèques (glib, lilv, libsndfile…) sont celles
+            # de MSYS2 UCRT64 qui l'a construit — un paquet les emporte dans deps/ (2026-11-19, portage Windows)
+            msys = j(env.get("GOLEM_ENGINE_MSYS") or r"C:\msys64\ucrt64", "bin")
+            if os.path.isdir(msys):
+                dirs.append(msys)
     else:
         d = linux_deps(top, home)
         if d:
@@ -131,6 +137,10 @@ def engine_env(top, environ=None, home=None):
     if not WIN:
         # les NOMS DE PARAMÈTRES en anglais quelle que soit la langue du système : golem retrouve un potard par son nom
         env["LANG"] = env["LC_ALL"] = "C.UTF-8"
+    else:
+        # LES VST3 DE GOLEM (2026-11-19) : Ardour ne parcourt sous Windows que Program Files\Common Files\VST3 ;
+        # golem-fx est posé dans %LOCALAPPDATA%\Programs\Common\VST3\GoleM — VST3_PATH (lu à sa première configuration)
+        env.setdefault("VST3_PATH", P.join(vst3_dirs(env, home)))
     return env
 
 
@@ -166,18 +176,55 @@ def vst3_bundles(dirs):
     return out
 
 
-def scan_vst3(top, env):
+def _scanned_file(env, home):
+    base = env.get("XDG_CONFIG_HOME") or os.path.join(env.get("LOCALAPPDATA") or home, "golem-engine")
+    return os.path.join(base, "golem-vst3-scanned.json")
+
+
+def scan_vst3(top, env, home=None):
     """Ardour sans interface ne lit que son CACHE VST3, que rien ne remplit : le scanner d'Ardour (un process séparé —
-    un plugin qui plante ne tue pas le moteur), avant chaque démarrage ; il saute ce qui est déjà en cache."""
+    un plugin qui plante ne tue pas le moteur), avant chaque démarrage ; il saute ce qui est déjà en cache.
+    WINDOWS (2026-11-19) : un process PAR bundle même déjà en cache — 159 bundles sur la machine du mainteneur, plus de
+    30 s avant chaque démarrage, et le bridge déclarait le moteur absent. Un bundle déjà scanné et inchangé (sa date) n'y
+    est plus relancé ; un neuf ou un mis à jour l'est. Linux garde le passage complet (non mesuré là-bas)."""
+    import json
     scan = find_program(top, ("ardour-vst3-scanner", "ardour-vst3-scanner.exe"))
     if not scan:
         return 0
+    home = home or os.path.expanduser("~")
+    path, done = _scanned_file(env, home), {}
+    if WIN:
+        try:
+            with open(path, encoding="utf-8") as f:
+                done = json.load(f) or {}
+        except (OSError, ValueError):
+            done = {}
     n = 0
     for b in vst3_bundles(vst3_dirs(env)):
         try:
+            stamp = os.stat(b).st_mtime
+        except OSError:
+            continue
+        if WIN and done.get(b) == stamp:
+            continue
+        try:
             subprocess.run([scan, "-q", b], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
             n += 1
+            done[b] = stamp
+        except subprocess.TimeoutExpired:
+            # UN PLUGIN QUI BLOQUE LE SCANNER (2026-11-19 : Neural DSP Parallax, sa licence) coûtait 30 s à CHAQUE
+            # démarrage : il est noté aussi, et retenté seulement quand il change (une mise à jour). Il ne se chargerait
+            # pas plus dans le moteur, dont le scanner est justement le garde-fou.
+            n += 1
+            done[b] = stamp
         except (OSError, subprocess.SubprocessError):
+            pass
+    if WIN and n:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(done, f, indent=0)
+        except OSError:
             pass
     return n
 
