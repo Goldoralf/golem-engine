@@ -2877,9 +2877,20 @@ local function preview_go (c, P, len, src)
 	Session:maybe_enable_record (false)
 	Session:request_roll (ARDOUR.TransportRequestSource.TRS_UI)
 	for _, pl in ipairs (P.players) do                 -- les lecteurs MIDI partent avec le transport
-		local a = pl.shm:to_int (0):array ()
+		-- LA MÉMOIRE DE L'INSTANCE D'AUJOURD'HUI (2026-11-19, plantage 0xC0000005 sous Windows) : armer la piste peut faire
+		-- REMPLACER l'instance du lecteur par Ardour (sa configuration d'E/S) ; la mémoire partagée gardée au montage était
+		-- alors libérée, et y écrire au départ du transport tuait le moteur (Linux survivait par chance). On la relit ici, et
+		-- on y réécrit la phrase : celle de l'ancienne instance est perdue avec elle. Comme drums_shm/std_shm, jamais gardée.
+		local shm = pl.proc:to_insert ():plugin (0):to_luaproc ():shmem ()
+		local a = shm:to_int (0):array ()
+		local nev = math.min (#pl.ev, 32768)
+		for k = 1, nev do
+			local ea = 64 + (k - 1) * 4
+			a[ea + 1], a[ea + 2], a[ea + 3], a[ea + 4] = pl.ev[k][1], pl.ev[k][2], pl.ev[k][3], pl.ev[k][4]
+		end
+		a[17] = nev
 		a[2] = 1
-		pl.shm:atomic_set_int (0, pl.shm:atomic_get_int (0) + 1)
+		shm:atomic_set_int (0, shm:atomic_get_int (0) + 1)
 	end
 	P.until_s = now_s () + len + (tonumber (c.tail) or 5.0)
 	if P.bench then
@@ -2936,7 +2947,7 @@ local function preview_service (c)
 			a[ea + 1], a[ea + 2], a[ea + 3], a[ea + 4] = ev[i][1], ev[i][2], ev[i][3], ev[i][4]
 		end
 		a[17] = nev
-		P.players[#P.players + 1] = { route = r, proc = p, shm = shm }
+		P.players[#P.players + 1] = { route = r, proc = p, ev = ev }
 		P.service[#P.service + 1] = r
 	end
 	if #P.service == 0 then return give_up ("nothing to play") end
@@ -3000,7 +3011,7 @@ local function preview_start (c)
 			end
 			a[17] = nev
 			set_params ({ proc = p, spec = { id = "preview" } }, { { pid = "ch", label = "Channel", value = (tk.spec.midi and tk.spec.midi.channel) or 0 } })
-			P.players[#P.players + 1] = { route = tk.route, proc = p, shm = shm }
+			P.players[#P.players + 1] = { route = tk.route, proc = p, ev = ev }
 		end
 	else
 		local f = io.open (c.di, "rb")

@@ -248,11 +248,25 @@ def main(argv):
     scan_vst3(TOP, env)
     cmd = [lua, os.path.join(HERE, "golem_watch.lua"), root, session, backend, device]
     pid_file = os.path.join(root, "presets", ".engine.pid")
+    # DÉVELOPPEMENT : GOLEM_ENGINE_GDB=<fichier> lance le moteur SOUS gdb (2026-11-19 : sous Windows un moteur qui meurt
+    # ne laisse qu'un code de sortie ; attacher gdb après coup figeait le banc). Au plantage, la pile de chaque fil va dans
+    # le fichier. Le PID écrit est alors celui de gdb : le bridge ne reconnaît pas le moteur (outil de diagnostic seul).
+    gdb_log = env.get("GOLEM_ENGINE_GDB")
+    if gdb_log:
+        gdb = env.get("GOLEM_ENGINE_GDB_BIN") or "gdb"
+        cmd = [gdb, "-batch", "-ex", "set pagination off", "-ex", "set logging file " + gdb_log.replace("\\", "/"),
+               "-ex", "set logging overwrite on", "-ex", "set logging enabled on",
+               "-ex", "handle SIGSEGV stop print nopass", "-ex", "run", "-ex", "bt 60", "-ex", "info registers rip",
+               "-ex", "thread apply all bt 20", "--args", *cmd]
     if WIN:
         p = subprocess.Popen(cmd, env=env)
         with open(pid_file, "w") as f:
             f.write(str(p.pid) + "\n")
-        return p.wait()
+        rc = p.wait()
+        # le CODE DE SORTIE dans le journal du moteur (2026-11-19) : sous Windows un moteur qui meurt ne laisse rien d'autre
+        # (0xC0000005 = accès mémoire, 0xC0000409 = abort / pile corrompue, 3 = abort du CRT)
+        print(f"golem engine: luasession exited with code {rc} (0x{rc & 0xFFFFFFFF:08X})", file=sys.stderr, flush=True)
+        return rc
     try:                                                       # un plantage laisse un core : la pile se lit avec gdb
         import resource
         resource.setrlimit(resource.RLIMIT_CORE, (resource.RLIM_INFINITY, resource.RLIM_INFINITY))
@@ -260,7 +274,7 @@ def main(argv):
         pass
     with open(pid_file, "w") as f:
         f.write(str(os.getpid()) + "\n")
-    os.execve(lua, cmd, env)                                   # ne revient pas
+    os.execvpe(cmd[0], cmd, env)                               # ne revient pas (cmd[0] : luasession, ou gdb en diagnostic)
 
 
 if __name__ == "__main__":

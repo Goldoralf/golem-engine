@@ -1,0 +1,17 @@
+diff --git a/b_synth/lv2.c b/b_synth/lv2.c
+index 15ea22c..8923293 100644
+--- a/b_synth/lv2.c
++++ b/b_synth/lv2.c
+@@ -453,8 +453,10 @@ save (LV2_Handle                instance,
+ 	fseek (x, 0, SEEK_END);
+ 	long int rsize = ftell (x);
+ 	rewind (x);
+-	out = (char*)malloc (rsize);
+-	fread (out, sizeof (char), rsize, x);
++	/* NUL-terminate: strlen/strcat below read past the buffer otherwise (open_memstream does it on POSIX) */
++	out = (char*)malloc (rsize + 1);
++	rsize = fread (out, sizeof (char), rsize, x);
++	out[rsize] = '\0';
+ 	fclose (x);
+ 	unlink (filename);
+ #endif
