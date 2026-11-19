@@ -17,6 +17,7 @@ directory, so a rebase onto a new Ardour release never conflicts here. The plan 
 | `engine/scripts/golem_safety.lua` | Lua DSP: zero-latency safety limiter (ceiling −1 dBFS), the last plugin of every route that goes to the card |
 | `engine/run.sh` | Starts the engine for golem (`run.sh <golem-root> [session] [backend] [device]`), writes `presets/.engine.pid` |
 | `dev/env.sh` | Run the binaries from `build/` without installing (`source golem/dev/env.sh`) |
+| `tools/win-build.sh` | Windows build, natively in an MSYS2 UCRT64 shell: packages, configure, build (what each flag is for: in the script) |
 
 Patches to upstream files (keep this list short; budget 10):
 
@@ -33,7 +34,14 @@ Patches to upstream files (keep this list short; budget 10):
 | `libs/ardour/luabindings.cc`: `Session:remaining_latency_preroll` bound | `[headless]` `[upstreamable]` | A Lua DSP that generates notes live and must fall on the timeline (the armed start of a standard: its tick 0 on sample 0 of the take) has to start inside the latency preroll, ahead by the output latency |
 | `libs/ardour/midi_track.cc`, `libs/ardour/plugin.cc`: a transport stop or locate no longer sends all-notes-off nor resolves plugin MIDI when `ARDOUR_MIDI_KEEP_NOTES_ON_TRANSPORT` is set | `[headless]` | The engine hosts instruments played live: notes come from a keyboard, a pad or a foot switch, not from the timeline. Starting or stopping a take, or seeking in a backing track, cut a held chord or a ringing sample (set by `golem/engine/run.sh`) |
 
+| `libs/backends/portaudio/wscript`: `jack64` is linked only when configure finds it | `[build]` `[upstreamable]` | The native Windows build linked `-ljack64` unconditionally, for Ardour's private PortAudio; MSYS2's static PortAudio does not use JACK and has no such library, so the backend failed to link |
+
+Non-code addition: `gtk2_ardour/icons/Golem Engine.ico` (golem's own icon) — the Windows resource file names the icon after
+`--program-name`.
+
 Build (binaries `golem-engine9-*`, config `~/.config/golem-engine9`): `./waf configure --program-name="Golem Engine" --with-backends=alsa,dummy --optimize && ./waf build`.
+Windows: `golem/tools/win-build.sh` in an MSYS2 UCRT64 shell (2026-11-19: builds; `luasession` creates a session on the
+dummy backend and loads golem's Lua DSP — plugins, the watcher and ASIO are the next steps).
 
 ## The package (`golem/tools/bundle.py`)
 
