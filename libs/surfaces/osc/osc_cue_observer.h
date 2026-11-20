@@ -32,7 +32,7 @@
 #include "pbd/stateful.h"
 #include "ardour/types.h"
 
-class OSCCueObserver
+class OSCCueObserver : public sigc::trackable /* golem : ses rappels en file sont invalidés à sa mort */
 {
 
   public:

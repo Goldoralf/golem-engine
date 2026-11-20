@@ -50,7 +50,7 @@ struct LocationMarkerSort {
 	}
 };
 
-class OSCGlobalObserver
+class OSCGlobalObserver : public sigc::trackable /* golem : ses rappels en file sont invalidés à sa mort */
 {
 
   public:

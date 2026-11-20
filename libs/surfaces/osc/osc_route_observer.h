@@ -34,7 +34,7 @@
 
 #include "osc.h"
 
-class OSCRouteObserver
+class OSCRouteObserver : public sigc::trackable /* golem : ses rappels en file sont invalidés à sa mort */
 {
 
   public:

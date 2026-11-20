@@ -19,7 +19,7 @@ directory, so a rebase onto a new Ardour release never conflicts here. The plan 
 | `dev/env.sh` | Run the binaries from `build/` without installing (`source golem/dev/env.sh`) |
 | `tools/win-build.sh` | Windows build, natively in an MSYS2 UCRT64 shell: packages, configure, build (what each flag is for: in the script) |
 
-Patches to upstream files (keep this list short; budget 10 — 12 since 2026-11-19, the two Windows ones are upstreamable):
+Patches to upstream files (keep this list short; budget 10 — 12 since 2026-11-19, the two Windows ones are upstreamable; 14 since 2026-11-20, two teardown crash fixes, upstreamable):
 
 | Patch | Tag | Why |
 |---|---|---|
@@ -35,6 +35,8 @@ Patches to upstream files (keep this list short; budget 10 — 12 since 2026-11-
 | `libs/ardour/midi_track.cc`, `libs/ardour/plugin.cc`: a transport stop or locate no longer sends all-notes-off nor resolves plugin MIDI when `ARDOUR_MIDI_KEEP_NOTES_ON_TRANSPORT` is set | `[headless]` | The engine hosts instruments played live: notes come from a keyboard, a pad or a foot switch, not from the timeline. Starting or stopping a take, or seeking in a backing track, cut a held chord or a ringing sample (set by `golem/engine/run.sh`) |
 | `libs/backends/portaudio/wscript`: `jack64` is linked only when configure finds it | `[build]` `[upstreamable]` | The native Windows build linked `-ljack64` unconditionally, for Ardour's private PortAudio; MSYS2's static PortAudio does not use JACK and has no such library, so the backend failed to link |
 | `libs/surfaces/osc/osc.cc`: the pause after each outgoing message is a yield (`Glib::usleep (0)`) on Windows | `[upstreamable]` | `Glib::usleep (1)` is a `Sleep (1)` on Windows — a full timer tick, 15.6 ms when the process is throttled. With meters on ~40 strips (~500 messages/s) the surface slept all the time: a command waited up to 752 ms, the first strip dump held commands 11 s, the looper closed its loop late (measured 2026-11-19). Now 4 ms |
+| `libs/ardour/io.cc`, `libs/ardour/port_manager.cc`, `libs/ardour/ardour/port_manager.h`: an `IO` unsubscribes from its ports first in its destructor, under a lock that `PortManager::connect_callback` holds while it emits | `[fix]` `[upstreamable]` | The backend thread delivers port (dis)connections between cycles, with no session lock, down to `IO::connection_change`; an `IO` dropped meanwhile on another thread (a take's tracks removed, a rig rebuilt) only lost its subscriptions with its base class, after its members: the call landed in a destroyed `IO` — the intermittent access violation of the Windows bench (caught with ProcDump 2026-11-20, `connection_change` → `RCUManager<PortSet>::reader`). The backend structure is shared by ALSA, PortAudio and Dummy |
+| `libs/surfaces/osc/osc_{route,select,cue,global}_observer.{h,cc}`: the observers are `sigc::trackable` and pass a real invalidator instead of `MISSING_INVALIDATOR` | `[fix]` `[upstreamable]` | A strip's signals reach the OSC thread through its request queue; a call still queued when its observer died (a rig rebuilt, a track removed) ran on the destroyed observer — `_osc` read from freed memory, `std::system_error` on its mutex, `terminate` (caught with ProcDump 2026-11-20 on the Windows bench, `send_gain_message` → `float_message_with_id`). Queued calls of a dead observer are now skipped |
 
 Non-code addition: `gtk2_ardour/icons/Golem Engine.ico` (golem's own icon) — the Windows resource file names the icon after
 `--program-name`.
