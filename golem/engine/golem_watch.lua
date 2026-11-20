@@ -1413,11 +1413,11 @@ SERVICE_MIX.backing = function () return BACKING_BUS and BACKING_BUS () end
 SERVICE_MIX.sample = function () return SAMPLE.route end
 SERVICE_MIX.looper = function () return LOOPER.loops and LOOPER.route or nil end   -- seulement quand le preset a un looper
 
-local function drums_op (op, slot)
+local function drums_op (op, slot, ret)
 	local shm = drums_shm ()
 	if not shm then return end
 	local a = shm:to_int (0):array ()
-	a[2], a[3] = op, slot or 0
+	a[2], a[3], a[7] = op, slot or 0, ret or 0           -- [6] le retour d'un fill (slot + 1, 0 = le groove courant)
 	shm:atomic_set_int (0, shm:atomic_get_int (0) + 1)   -- le nonce EN DERNIER
 end
 
@@ -1496,7 +1496,13 @@ local function drums_cmd (c)
 		DRUMS.idx = math.max (0, math.min (math.max (0, DRUMS.patterns - 1), math.floor (tonumber (c.idx) or 0)))
 		drums_op (2, DRUMS.idx)
 	elseif op == "fill" then
-		drums_op (3, DRUMS.patterns + math.floor (tonumber (c.fill_idx) or 0))
+		-- `then_idx` (2026-11-20) : le fill MÈNE à cette variation — le séquenceur y repart au lieu du groove courant
+		local nxt = tonumber (c.then_idx)
+		if nxt then
+			nxt = math.max (0, math.min (math.max (0, DRUMS.patterns - 1), math.floor (nxt)))
+			DRUMS.idx = nxt
+		end
+		drums_op (3, DRUMS.patterns + math.floor (tonumber (c.fill_idx) or 0), nxt and nxt + 1 or 0)
 	elseif op == "load" then                         -- le kit posé, rien ne joue (le rendu d'un bloc, d'un kit)
 		if c.kit_error then log ("  boîte à rythmes : " .. tostring (c.kit_error)) end
 		drums_kit (c.kit_plugin)

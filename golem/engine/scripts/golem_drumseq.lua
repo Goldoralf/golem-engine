@@ -17,12 +17,14 @@ ardour {
 -- LA BANQUE vit dans la mémoire partagée de l'instance (entiers), écrite par golem_watch.lua :
 --   [0] nonce (changé EN DERNIER : la commande est lue sur son front)  [1] op  [2] slot  [3] ticks par noire
 --       op : 0 stop · 1 joue le slot · 2 variation · 3 fill · 4 morceau
+--   [6] retour d'un fill (2026-11-20) : 0 = le groove courant ; n + 1 = le slot n (la variation précédée de son fill,
+--       qui sort du mode morceau comme une variation)
 --   [8] joue  [9] slot courant  [10] 1 = dans un fill  [11] battement  [13] étape du morceau (-1 hors morceau)  [14] morceau
 --   [16] nombre d'étapes  [17] 0 = boucle, 1 = une fois  [18…] étapes : slot, passages (64 au plus)
 --   slot s à 256 + s × 8192 : [0] nombre d'événements  [1] longueur (ticks)  [2] une mesure (ticks)
 --                             [8…] événements : tick, note, vélocité, 0
 
-local CTL_NONCE, CTL_OP, CTL_SLOT, CTL_PPQ = 0, 1, 2, 3
+local CTL_NONCE, CTL_OP, CTL_SLOT, CTL_PPQ, CTL_RET = 0, 1, 2, 3, 6
 local ST_PLAYING, ST_SLOT, ST_MODE, ST_HB, ST_SEQIDX, ST_SEQON = 8, 9, 10, 11, 13, 14
 local SEQ_LEN, SEQ_MODE, SEQ_STEPS = 16, 17, 18
 local SLOT_BASE, SLOT_STRIDE, EV_OFF, EV_STRIDE = 256, 8192, 8, 4
@@ -42,7 +44,7 @@ end
 local rate = 48000
 local playing, cur_slot, cur_len, cur_bar, cur_nev = false, -1, 0, 1, 0
 local ppq, ev_cur, mode_fill, return_slot = 0, 0, false, -1
-local pending_op, pending_slot = 0, -1
+local pending_op, pending_slot, pending_ret = 0, -1, 0
 local seq_on, seq_idx, seq_rep = false, 0, 0     -- seq_rep : passages restants de l'étape (-1 = sans fin)
 local last_nonce, hb = -1, 0
 local t                                           -- la mémoire partagée, vue comme un tableau d'entiers (index 1 = [0])
@@ -98,7 +100,10 @@ function dsp_run (_, _, n_samples)
 			if playing then pending_op, pending_slot = 2, slot
 			else playing, mode_fill, return_slot = true, false, -1; load_slot (slot) end
 		elseif op == 3 then
-			if playing then pending_op, pending_slot = 3, slot end
+			if playing then
+				pending_op, pending_slot, pending_ret = 3, slot, g (CTL_RET)
+				if pending_ret > 0 then seq_on = false end   -- un fill qui mène à une variation sort du mode morceau
+			end
 		elseif op == 4 then
 			if g (SEQ_LEN) > 0 then
 				playing, mode_fill, pending_op, return_slot = true, false, 0, -1
@@ -141,7 +146,7 @@ function dsp_run (_, _, n_samples)
 					elseif pending_op == 2 then
 						load_slot (pending_slot); pending_op = 0
 					elseif pending_op == 3 then
-						return_slot = cur_slot; load_slot (pending_slot); mode_fill = true; pending_op = 0
+						return_slot = pending_ret > 0 and pending_ret - 1 or cur_slot; load_slot (pending_slot); mode_fill = true; pending_op = 0
 					elseif seq_on then
 						if seq_rep > 0 then seq_rep = seq_rep - 1 end
 						if seq_rep ~= 0 then
@@ -160,7 +165,7 @@ function dsp_run (_, _, n_samples)
 					if pending_op == 2 then
 						load_slot (pending_slot); pending_op = 0
 					elseif pending_op == 3 then
-						return_slot = cur_slot; load_slot (pending_slot); mode_fill = true; pending_op = 0
+						return_slot = pending_ret > 0 and pending_ret - 1 or cur_slot; load_slot (pending_slot); mode_fill = true; pending_op = 0
 					end
 				end
 			end
