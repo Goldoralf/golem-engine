@@ -423,6 +423,21 @@ OSC::surface_destroy (OSCSurface* sur)
 }
 
 
+/* [golem][headless] ARDOUR_OSC_LOCAL: the surface's only client is golem's local bridge, and the surface has no
+ * authentication — a message from anywhere but this machine is dropped. Registered FIRST: liblo calls the methods in
+ * the order they were added and stops at the first one that returns 0 (liblo cannot bind a unicast server to the
+ * loopback: its `ip` setting is for multicast — measured, the port stayed on 0.0.0.0). */
+static int
+golem_local_only (const char*, const char*, lo_arg**, int, lo_message msg, void*)
+{
+	lo_address  src  = lo_message_get_source (msg);
+	const char* host = src ? lo_address_get_hostname (src) : 0;
+	if (host && (!strcmp (host, "127.0.0.1") || !strcmp (host, "::1") || !strncmp (host, "::ffff:127.", 11))) {
+		return 1; /* local: the next handlers get it */
+	}
+	return 0;     /* handled: dropped */
+}
+
 void
 OSC::register_callbacks()
 {
@@ -439,6 +454,10 @@ OSC::register_callbacks()
 		}
 
 		serv = srvs[i];
+
+		if (g_getenv ("ARDOUR_OSC_LOCAL")) {
+			lo_server_add_method (serv, 0, 0, golem_local_only, this);
+		}
 
 
 #define REGISTER_CALLBACK(serv,path,types, function) lo_server_add_method (serv, path, types, OSC::_ ## function, this)

@@ -127,6 +127,8 @@ def engine_env(top, environ=None, home=None):
         env["XDG_CONFIG_HOME"] = j(top, "golem", "dev", "config")
     # la surface OSC n'a qu'un client, le bridge local : pas d'annonce de son port sur le réseau
     env["ARDOUR_OSC_NO_ZEROCONF"] = "1"
+    # …et n'écoute que la boucle locale (2026-11-20) : sans authentification, elle était ouverte à tout le réseau local
+    env["ARDOUR_OSC_LOCAL"] = "1"
     # le port de la surface OSC : 3819 par défaut ; un banc lancé à côté du moteur qui joue en nomme un autre
     if env.get("GOLEM_ENGINE_OSC"):
         env["ARDOUR_OSC_PORT"] = env["GOLEM_ENGINE_OSC"]
