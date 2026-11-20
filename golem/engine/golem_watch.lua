@@ -122,12 +122,22 @@ local function write_file (path, text)
 	local tmp = path .. ".tmp"
 	local f = assert (io.open (tmp, "w"))
 	f:write (text); f:close ()
+	-- WINDOWS (2026-11-19, portage) : os.rename n'y REMPLACE pas un fichier existant. Ôter la cible puis renommer
+	-- (2026-11-19) laissait une fenêtre où le fichier MANQUAIT — un lecteur lisait « rien » (le banc : backing à 0,00 s
+	-- juste après un seek, 2 passages sur 5, 2026-11-20) — et l'ôter échouait quand un lecteur le tenait ouvert : la mise
+	-- à jour était perdue. LuaAPI.replace_file (fork) remplace d'un coup (MoveFileExW REPLACE_EXISTING) : un lecteur
+	-- voit l'ancien ou le nouveau, jamais rien. Tenu ouvert par un lecteur, le remplacement échoue : on réessaie.
+	local replace = ARDOUR.LuaAPI.replace_file
+	if replace then
+		for i = 1, 3 do
+			if replace (tmp, path) then return end
+			ARDOUR.LuaAPI.usleep (2000)
+		end
+		os.remove (tmp)
+		return
+	end
 	if os.rename (tmp, path) then return end
-	-- WINDOWS (2026-11-19, portage) : rename() n'y REMPLACE pas un fichier existant — il échouait sans bruit, et chaque
-	-- témoin n'était écrit qu'UNE fois : accusés, état, horloge restaient figés, le bridge croyait toute commande sans
-	-- réponse. On ôte la cible puis on renomme ; un lecteur qui passe entre les deux voit « absent », comme avant la
-	-- première écriture (il relit au tour suivant).
-	os.remove (path)
+	os.remove (path)                             -- un moteur sans replace_file : l'ancienne façon
 	if not os.rename (tmp, path) then
 		os.remove (tmp)
 	end
@@ -1612,6 +1622,18 @@ local function std_parts (c, play)
 	-- les fichiers des instruments : ceux que le bridge nomme (`instruments`), sinon ceux du dépôt où tourne ce veilleur
 	local inst = type (c.instruments) == "table" and c.instruments or {}
 	local piano, guitar = inst.piano or PIANO_SFZ, inst.guitar or GUITAR_SFZ
+	-- un .sfz dont les fichiers MANQUENT n'est jamais donné à sfizz (Shinyguitar et le piano sont des téléchargements
+	-- facultatifs de l'installateur) : son échec de chargement abîme le tas — 0xC0000374, le moteur tué juste après
+	-- « [sfizz] Loading failed » (banc Windows, 2026-11-20). golem_chordseq.lua (REAPER) fait déjà ce garde
+	local function exists (p) local f = io.open (p, "r"); if f then f:close () return true end return false end
+	if want.keys and not exists (piano) then
+		log ("⚠ standard : piano absent (" .. piano .. ") — partie non posée"); want.keys = false
+	end
+	-- la pompe INCLUT Shinyguitar, rangé à côté d'elle (le bridge donne toujours le chemin de golem-pompe.sfz)
+	local shiny = (guitar:match ("^(.*)[/\\]") or ".") .. "/Shinyguitar/Programs/acoustic_two.sfz"
+	if want.guitar and not exists (shiny) then
+		log ("⚠ standard : Shinyguitar absent (" .. shiny .. ") — pompe non posée"); want.guitar = false
+	end
 	if want.keys then std_instrument ("keys", SFIZZ_URI, { [SFIZZ_FILE] = piano }) end
 	if want.bass then
 		std_instrument ("bass", SYNTH_URI, nil)

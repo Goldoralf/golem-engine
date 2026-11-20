@@ -229,6 +229,39 @@ def scan_vst3(top, env, home=None):
     return n
 
 
+# un fichier MIDI SANS ÉVÉNEMENT tel qu'Ardour le crée : l'en-tête, puis une seule piste qui ne contient que sa fin
+_EMPTY_SMF_TRACK = b"MTrk\x00\x00\x00\x04\x00\xff\x2f\x00"
+
+
+def sweep_empty_midi(session):
+    """Efface les fichiers MIDI VIDES que la session précédente a laissés. Après chaque prise, Ardour donne une source
+    d'écriture neuve à CHAQUE piste MIDI, armée ou non (le nom de prise change) ; le fichier est créé tout de suite et
+    ne s'efface qu'à la fermeture de la session — or le moteur est arrêté net (TerminateProcess sous Windows, SIGTERM
+    sous Linux) : ~10 fichiers de 26 octets par prise, pour toujours (mesuré 2026-11-20). Un fichier sans événement ne
+    porte rien et la session ne garde pas de source vide : rien ne le lit. Rend le nombre de fichiers effacés."""
+    n = 0
+    base = os.path.join(session, "interchange")
+    if not os.path.isdir(base):
+        return 0
+    for name in os.listdir(base):
+        d = os.path.join(base, name, "midifiles")
+        if not os.path.isdir(d):
+            continue
+        for f in os.listdir(d):
+            p = os.path.join(d, f)
+            try:
+                if not f.lower().endswith(".mid") or os.path.getsize(p) != 26:
+                    continue
+                with open(p, "rb") as h:
+                    data = h.read()
+                if data[:4] == b"MThd" and data[4:8] == b"\x00\x00\x00\x06" and data[14:] == _EMPTY_SMF_TRACK:
+                    os.remove(p)
+                    n += 1
+            except OSError:
+                pass
+    return n
+
+
 def no_power_throttling(pid):
     """Windows 11 BRIDE un processus sans fenêtre visible (« power throttling ») : il ignore sa demande de résolution du
     minuteur (timeBeginPeriod, posée par le backend) et peut le reléguer, EcoQoS, sur des cœurs lents à basse fréquence.
@@ -275,6 +308,9 @@ def main(argv):
         print("golem engine: luasession not found under " + TOP, file=sys.stderr)
         return 1
     scan_vst3(TOP, env)
+    swept = sweep_empty_midi(session)
+    if swept:
+        print(f"golem engine: {swept} empty MIDI file(s) left by the previous session removed", file=sys.stderr, flush=True)
     cmd = [lua, os.path.join(HERE, "golem_watch.lua"), root, session, backend, device]
     pid_file = os.path.join(root, "presets", ".engine.pid")
     # DÉVELOPPEMENT : GOLEM_ENGINE_GDB=<fichier> lance le moteur SOUS gdb (2026-11-19 : sous Windows un moteur qui meurt

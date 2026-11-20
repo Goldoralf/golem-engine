@@ -19,6 +19,8 @@
 #include <cstring>
 #include <vamp-hostsdk/PluginLoader.h>
 
+#include <glib/gstdio.h>
+
 #include "pbd/basename.h"
 #include "pbd/compose.h"
 #include "pbd/error.h"
@@ -177,6 +179,14 @@ ARDOUR::LuaAPI::place_audio_file (Session* s, std::shared_ptr<Route> r, const st
 	}
 	pl->add_region (region, timepos_t (position));
 	return region;
+}
+
+/* [golem] a status file replaced atomically: g_rename uses MoveFileExW (MOVEFILE_REPLACE_EXISTING) on
+ * Windows, where os.rename refuses an existing target */
+bool
+ARDOUR::LuaAPI::replace_file (std::string const& from, std::string const& to)
+{
+	return g_rename (from.c_str (), to.c_str ()) == 0;
 }
 
 /* [golem] a take's capture sources, released once golem has copied or moved their files: removed

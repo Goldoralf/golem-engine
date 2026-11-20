@@ -89,6 +89,19 @@ namespace ARDOUR { namespace LuaAPI {
 	 */
 	int release_sources (Session* s, std::vector<std::shared_ptr<ARDOUR::Source> > const& srcs);
 
+	/** Atomically replace a file with another one (rename over an existing target)
+	 *
+	 * Lua's os.rename does not replace an existing file on Windows. A status file written
+	 * through a temporary file must never be missing for a reader: on Windows this uses
+	 * MoveFileExW with MOVEFILE_REPLACE_EXISTING (g_rename), elsewhere rename(2).
+	 *
+	 * @param from the file to move (usually a temporary file next to the target)
+	 * @param to the target, replaced when it exists
+	 * @returns true on success; false leaves both files as they were (a reader holding the
+	 * target open on Windows makes it fail)
+	 */
+	bool replace_file (std::string const& from, std::string const& to);
+
 	/** Create a null processor shared pointer
 	 *
 	 * This is useful for Track:bounce() to indicate no processing.
