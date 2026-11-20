@@ -9,8 +9,10 @@
 #   · COMSPEC exported: waf runs its rules through Python's subprocess with a shell; without COMSPEC (an MSYS2 login
 #     shell started from another bash does not always keep it) every such rule fails with cmd.exe's "syntax error".
 #   · --windows-key=Mod4: the default "Mod4><Super" holds shell redirection characters; the engine has no keys anyway.
-#   · backends portaudio,dummy: PortAudio is the Windows audio backend (ASIO needs a PortAudio built with the ASIO SDK:
-#     a later step); the dummy backend serves the benches.
+#   · backends portaudio,dummy: PortAudio is the Windows audio backend; the dummy backend serves the benches.
+#   · ASIO (2026-11-20): MSYS2's PortAudio has no ASIO. golem/tools/win-portaudio-asio.sh builds one with Steinberg's
+#     SDK (GPL v3 since 2.3.4) into .deps/portaudio-asio; when that prefix exists it comes first in PKG_CONFIG_PATH and
+#     the backend is built WITH_ASIO. Without it the engine still builds, with WASAPI, WDM-KS, DirectSound and MME.
 set -euo pipefail
 [ "${MSYSTEM:-}" = UCRT64 ] || { echo "run this in an MSYS2 UCRT64 shell (MSYSTEM=UCRT64)" >&2; exit 2; }
 test -f gtk2_ardour/wscript || { echo "run this at the root of the golem-engine repository" >&2; exit 2; }
@@ -23,6 +25,10 @@ for n in toolchain pkgconf python boost glibmm libsndfile curl libarchive liblo 
 done
 pacman -S --needed --noconfirm $pkgs git patch
 export COMSPEC="${COMSPEC:-$(cygpath -w "${SYSTEMROOT:-C:\\Windows}")\\System32\\cmd.exe}"
+[ "${GOLEM_NO_ASIO:-}" = 1 ] || [ -f .deps/portaudio-asio/include/pa_asio.h ] || bash golem/tools/win-portaudio-asio.sh
+if [ -f .deps/portaudio-asio/include/pa_asio.h ]; then
+  export PKG_CONFIG_PATH="$(pwd)/.deps/portaudio-asio/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+fi
 python ./waf configure --program-name="Golem Engine" --dist-target=mingw --no-dr-mingw --cxx17 --windows-key=Mod4 \
   --with-backends=portaudio,dummy --optimize --no-lrdf --no-phone-home --no-nls
 python ./waf build -j"$(nproc)"

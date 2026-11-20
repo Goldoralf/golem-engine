@@ -1381,7 +1381,16 @@ VST3PI::VST3PI (std::shared_ptr<ARDOUR::VST3PluginModule> m, std::string unique_
 			continue;
 		}
 #if defined(PLATFORM_WINDOWS) && defined(COMPILER_MINGW)
-		if (dpf_midi_CC->match (tchar_to_ustring (pi.title)))
+		/* golem: glibmm's Regex::match throws when glib's matcher reports an error; one title of golem-fx's chorus
+		 * did, and the exception aborted the whole plugin instantiation (VST3PluginInfo::load only catches
+		 * failed_constructor) — the plugin never loaded. A title the matcher refuses is not a DPF MIDI CC. */
+		bool dpf_cc = false;
+		try {
+			dpf_cc = dpf_midi_CC->match (tchar_to_ustring (pi.title));
+		} catch (...) {
+			dpf_cc = false;
+		}
+		if (dpf_cc)
 #else
 		if (std::regex_search (tchar_to_utf8 (pi.title), dpf_midi_CC))
 #endif

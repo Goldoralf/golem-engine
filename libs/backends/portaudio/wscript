@@ -11,7 +11,9 @@ def options(opt):
 
 def configure(conf):
     autowaf.check_pkg(conf, 'portaudio-2.0', uselib_store='PORTAUDIO', atleast_version='19')
-    conf.check(header_name='pa_asio.h', define_name='WITH_ASIO', mandatory=False)
+    # [build] golem: look for pa_asio.h where PortAudio's own headers are (a PortAudio built with ASIO in a private
+    # prefix, golem/tools/win-portaudio-asio.sh), not only in the system include path
+    conf.check(header_name='pa_asio.h', define_name='WITH_ASIO', uselib='PORTAUDIO', mandatory=False)
     # [build] golem: link jack64 only where it exists (MSYS2's static PortAudio does not use JACK)
     if conf.env['build_target'] == 'mingw':
         conf.check(lib='jack64', uselib_store='JACK64', mandatory=False)

@@ -22,12 +22,22 @@ end
 
 -- passer la route en stéréo À ce plugin : deux sorties, les deux entrées sur le canal 1, la sortie de la route à 2 ports
 function M.go_stereo (route, proc)
-	route:customize_plugin_insert (proc, 1, ARDOUR.ChanCount (AUDIO, 2), ARDOUR.ChanCount (AUDIO, 0))
+	-- chaque appel Ardour nommé : une exception C++ n'a pas de pile (2026-11-20, premier chorus golem-fx sur une vraie
+	-- carte sous Windows — « userdata » sans rien d'autre)
+	local function step (what, f)
+		local ok, err = pcall (f)
+		if not ok then error ("passage en stéréo, " .. what .. " : " .. tostring (err), 0) end
+	end
+	step ("customize_plugin_insert", function ()
+		route:customize_plugin_insert (proc, 1, ARDOUR.ChanCount (AUDIO, 2), ARDOUR.ChanCount (AUDIO, 0))
+	end)
 	local m = ARDOUR.ChanMapping ()
 	m:set (AUDIO, 0, 0)                      -- broche 0 <- tampon 0
 	m:set (AUDIO, 1, 0)                      -- broche 1 <- tampon 0 : la DI sur les deux entrées, comme REAPER
-	proc:to_insert ():set_input_map (0, m)
-	while route:output ():n_ports ():n_audio () < 2 do route:output ():add_port ("", AUDIO) end
+	step ("set_input_map", function () proc:to_insert ():set_input_map (0, m) end)
+	step ("add_port", function ()
+		while route:output ():n_ports ():n_audio () < 2 do route:output ():add_port ("", AUDIO) end
+	end)
 end
 
 -- OÙ POSER UN PLUGIN : AVANT LE FADER. `add_processor_by_index (proc, -1)` l'ajoute « à la fin », c'est-à-dire APRÈS le

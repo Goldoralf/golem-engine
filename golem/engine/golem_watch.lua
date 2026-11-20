@@ -574,7 +574,8 @@ local function add_block (r, spec, nch)
 	if spec.plugin.lv2 then
 		p = ARDOUR.LuaAPI.new_plugin (Session, spec.plugin.lv2, ARDOUR.PluginType.LV2, "")
 	elseif spec.plugin.vst3 then
-		p = ARDOUR.LuaAPI.new_plugin (Session, spec.plugin.vst3, ARDOUR.PluginType.VST3, "")
+		local okn, errn = pcall (function () p = ARDOUR.LuaAPI.new_plugin (Session, spec.plugin.vst3, ARDOUR.PluginType.VST3, "") end)
+		if not okn then error ("création du plugin VST3 " .. tostring (spec.plugin.vst3) .. " : " .. tostring (errn), 0) end
 	elseif spec.plugin.host then                    -- le VST Host : un plugin installé, retrouvé par son nom
 		local id = HOST.id_of (spec.plugin.host)
 		if not id then
@@ -589,7 +590,8 @@ local function add_block (r, spec, nch)
 		log ("  bloc " .. tostring (spec.id) .. " : plugin absent " .. tostring (spec.plugin.lv2 or spec.plugin.vst3 or spec.plugin.host or spec.plugin.lua))
 		return nil
 	end
-	nch = CHAIN.add (r, p, nch or 1)                -- en fin de chaîne ; un plugin stéréo passe la route en stéréo
+	local okc, errc = pcall (function () nch = CHAIN.add (r, p, nch or 1) end)   -- en fin de chaîne ; un plugin stéréo passe la route en stéréo
+	if not okc then error ("insertion de " .. tostring (spec.id) .. " dans " .. r:name () .. " : " .. tostring (errc), 0) end
 	for prop, path in pairs (spec.files or {}) do
 		ARDOUR.LuaAPI.set_plugin_insert_property (p:to_insert (), prop, path)
 	end
@@ -859,6 +861,7 @@ local function materialize (plan)
 	local inputs = {}                              -- {port de la route, port de la carte} : reliés une fois la scène posée
 	log ("  carte : " .. #ins .. " entrée(s), " .. #outs .. " sortie(s) physiques" .. (silent and " — ESSAI SILENCIEUX" or ""))
 	for _, spec in ipairs (build_order (plan.tracks)) do
+		MAT_STEP = "route " .. tostring (spec.name)   -- l'étape du montage, dite par un échec (une exception C++ n'a pas de pile)
 		local r = new_route (spec)
 		RIG.routes[spec.name] = r
 		RIG.order[#RIG.order + 1] = spec.name
@@ -867,9 +870,12 @@ local function materialize (plan)
 		local nch = spec.kind == "midi" and 2 or r:input ():n_ports ():n_audio ()
 		if nch < 1 then nch = 1 end
 		for _, bs in ipairs (spec.blocks or {}) do
+			MAT_STEP = "route " .. tostring (spec.name) .. ", bloc " .. tostring (bs.id)
 			local p, n2 = add_block (r, bs, nch)
 			if n2 then nch = n2 end                    -- un plugin absent ne change rien aux canaux
+			MAT_STEP = "route " .. tostring (spec.name) .. ", bloc " .. tostring (bs.id) .. " (réglages initiaux)"
 			if p and bs.init then set_params ({ proc = p, spec = bs }, bs.init) end   -- golem_rig FX_INIT
+			MAT_STEP = "route " .. tostring (spec.name) .. ", bloc " .. tostring (bs.id) .. " (clé, traducteur)"
 			-- LA CLÉ d'un gate à clé (Met, le gate de golem-fx ; golem docs/golem-fx-sheet.md §4) : le sidechain du
 			-- plugin, relié à l'entrée de la carte de la lane — le DI brut, pas ce qui sort de l'ampli. Sans clé reliée,
 			-- Met écoute son entrée principale.
@@ -889,6 +895,7 @@ local function materialize (plan)
 			local rc = port:connect (other)
 			if rc ~= 0 then log ("  lien refusé " .. port:name () .. " -> " .. tostring (other) .. " (" .. tostring (rc) .. ")") end
 		end
+		MAT_STEP = "route " .. tostring (spec.name) .. ", sorties"
 		if spec.out and #spec.out > 0 then
 			-- le LIMITEUR DE SÉCURITÉ en dernier plugin de toute route qui sort vers la carte (golem_safety.jsfx sous
 			-- REAPER, porté à l'identique : -1 dBFS, aucune anticipation) — après les blocs : il ne décale aucun index
@@ -930,6 +937,7 @@ local function materialize (plan)
 			else log ("  " .. spec.name .. " : pas de sortie " .. tostring (o) .. " sur la carte") end
 		end
 	end
+	MAT_STEP = "liens entre routes"
 	for _, spec in ipairs (plan.tracks or {}) do     -- les liens entre routes, une fois toutes créées
 		local dst = RIG.routes[spec.name]
 		for _, src in ipairs (spec.from or {}) do
@@ -962,7 +970,9 @@ local function materialize (plan)
 		if pending > 0 then ARDOUR.LuaAPI.usleep (20000) end
 	end
 	log (string.format ("  fichiers lus en %.0f ms%s", (now_s () - tf) * 1000, pending > 0 and (", " .. pending .. " en retard") or ""))
+	MAT_STEP = "scène (apply_state)"
 	apply_state (plan)
+	MAT_STEP = "entrées de la carte"
 	for _, l in ipairs (inputs) do                    -- la scène est posée : le signal peut entrer
 		local rc = l[1]:connect (l[2])
 		if rc ~= 0 then log ("  lien d'entrée refusé " .. l[1]:name () .. " <- " .. tostring (l[2]) .. " (" .. tostring (rc) .. ")") end
@@ -3304,13 +3314,20 @@ local ACTIONS = {
 			while Session:actively_recording () and now_s () - t0 < 1.0 do ARDOUR.LuaAPI.usleep (20000) end
 			log ("prise : en pause pour le rappel")
 		end
-		local okm, errm = pcall (materialize, plan)
+		local okm, errm = xpcall (materialize, function (e)   -- la pile du montage, et le texte d'une exception C++
+			local s = tostring (e)
+			if type (e) == "userdata" then
+				local okw, w = pcall (function () return e:what () end)
+				if okw and w then s = "exception C++ : " .. tostring (w) end
+			end
+			return debug.traceback (s, 2)
+		end, plan)
 		xr_release ()                               -- même si le montage a échoué : le compteur ne reste jamais retenu
 		if paused then
 			Session:maybe_enable_record (false)
 			log ("prise : reprise après le rappel")
 		end
-		if not okm then error (errm) end
+		if not okm then error (tostring (errm) .. " — montage : " .. tostring (MAT_STEP)) end
 		RIG.verified_again = false
 		RIG.verify_at = now_s () + 2.0             -- les plugins chargent leurs fichiers en différé (IR) : relire après
 		RIG.midi_at = now_s () + 1.0               -- un synthé tout juste posé peut manquer son premier MIDI : renvoi
@@ -3413,17 +3430,27 @@ local function run (cmd)
 		log ("action inconnue ignorée : " .. tostring (cmd.action))
 		return
 	end
-	local ok, err = pcall (f, cmd)
+	-- la PILE avec l'erreur (2026-11-20, premier rappel sur une vraie carte sous Windows : « ÉCHEC rig_recall :
+	-- userdata: 0000… » — une exception C++ que tostring ne lit pas, et aucune ligne pour la situer)
+	local ok, err = xpcall (f, function (e)
+		local s = tostring (e)
+		if type (e) == "userdata" then
+			local okw, w = pcall (function () return e:what () end)
+			if okw and w then s = "exception C++ : " .. tostring (w) end
+		end
+		return debug.traceback (s, 2)
+	end, cmd)
 	if not ok then log ("ÉCHEC " .. tostring (cmd.action) .. " : " .. tostring (err)) end
 end
 
 -- ── démarrage ────────────────────────────────────────────────────────────────────────────────────────
 -- la CARTE : le nom exact, sinon un nom contenu dans l'autre (le registre de golem dit « Universal Audio Volt 276 »,
 -- le backend ALSA d'Ardour « Volt 276 »). Avant la session : la fréquence et le buffer s'y choisissent.
-local function pick_device (be)
+-- `list` : la liste où chercher (PortAudio sépare l'entrée et la sortie : enumerate_devices y est vide, 2026-11-20)
+local function pick_device (be, list)
 	if DEVICE == "" then return nil end
 	local want, found = DEVICE:lower (), nil
-	for d in be:enumerate_devices ():iter () do
+	for d in (list or be:enumerate_devices ()):iter () do
 		local n = d.name:lower ()
 		if n == want then return d.name end
 		if not found and (want:find (n, 1, true) or n:find (want, 1, true)) then found = d.name end
@@ -3456,13 +3483,42 @@ local function open_session ()
 	end
 	BACKEND_PTR = be
 	if DEVICE ~= "" then
-		local dev = pick_device (be)
-		if not dev then error ("carte introuvable pour « " .. DEVICE .. " »") end
-		be:set_device_name (dev)
+		-- LE PILOTE (Windows, 2026-11-20) : PortAudio range les cartes par API hôte (ASIO, WASAPI, WDM-KS…) ; la carte
+		-- n'est cherchée que parmi celles du pilote choisi. GOLEM_ENGINE_DRIVER s'il est donné, sinon ASIO (le pilote de
+		-- la carte que golem règle pour REAPER), sinon le premier. ALSA n'a qu'un pilote : rien à choisir.
+		if BACKEND:find ("PortAudio", 1, true) then
+			local drivers, pickd, wantd = {}, nil, os.getenv ("GOLEM_ENGINE_DRIVER")
+			for d in be:enumerate_drivers ():iter () do drivers[#drivers + 1] = d end
+			for _, d in ipairs (drivers) do if wantd and d == wantd then pickd = d end end
+			if not pickd then for _, d in ipairs (drivers) do if d == "ASIO" then pickd = d end end end
+			pickd = pickd or drivers[1]
+			if pickd then
+				be:set_driver (pickd)
+				log ("pilote audio : " .. pickd .. " (" .. table.concat (drivers, ", ") .. ")")
+			end
+		end
+		local split = be:use_separate_input_and_output_devices ()
+		local list = split and be:enumerate_input_devices () or nil
+		local dev = pick_device (be, list)
+		local out = split and pick_device (be, be:enumerate_output_devices ()) or dev
+		if not dev or not out then
+			local names = {}                         -- ce que le pilote propose : sans ça, rien ne disait quoi choisir
+			for d in (list or be:enumerate_devices ()):iter () do names[#names + 1] = d.name end
+			error ("carte introuvable pour « " .. DEVICE .. " » (ce pilote propose : " .. table.concat (names, ", ") .. ")")
+		end
+		if split then                                -- PortAudio : l'entrée et la sortie, la même carte (ASIO)
+			be:set_input_device_name (dev)
+			be:set_output_device_name (out)
+		else
+			be:set_device_name (dev)
+		end
 		be:set_sample_rate (48000)
 		local cfg = read_json_early (AUDIO_CFG)
-		if cfg and cfg.buffer then be:set_buffer_size (cfg.buffer) end
-		log ("carte : " .. dev .. " (demandée : " .. DEVICE .. ")")
+		-- le réglage du moteur (Dashboard) d'abord ; sinon celui que golem demande à la carte (Windows : Settings ▸ Audio,
+		-- passé par l'adaptateur) — sans rien, PortAudio ouvrait l'ASIO à 1024 échantillons (2026-11-20)
+		local buf = (cfg and cfg.buffer) or tonumber (os.getenv ("GOLEM_ENGINE_BUFFER"))
+		if buf then be:set_buffer_size (buf) end
+		log ("carte : " .. dev .. " (demandée : " .. DEVICE .. ")" .. (buf and (", buffer " .. buf) or ""))
 	end
 	local cfg = ARDOUR.config ()
 	cfg:set_input_auto_connect (ARDOUR.AutoConnectOption.ManualConnect)
