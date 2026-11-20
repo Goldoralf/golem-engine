@@ -179,6 +179,27 @@ ARDOUR::LuaAPI::place_audio_file (Session* s, std::shared_ptr<Route> r, const st
 	return region;
 }
 
+/* [golem] a take's capture sources, released once golem has copied or moved their files: removed
+ * from the session so that the files are closed. One save for all of them, not one per source. */
+int
+ARDOUR::LuaAPI::release_sources (Session* s, std::vector<std::shared_ptr<Source> > const& srcs)
+{
+	if (!s) {
+		return 0;
+	}
+	int n = 0;
+	{
+		Session::StateProtector sp (s);
+		for (std::shared_ptr<Source> const& src : srcs) {
+			if (src) {
+				s->remove_source (src, true);
+				++n;
+			}
+		}
+	}
+	return n;
+}
+
 std::shared_ptr<Processor>
 ARDOUR::LuaAPI::new_send (Session* s, std::shared_ptr<Route> r, std::shared_ptr<Processor> before)
 {

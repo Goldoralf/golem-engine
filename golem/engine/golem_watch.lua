@@ -2588,11 +2588,48 @@ local function perf_stop ()
 	log ("prise : arrêt demandé")
 end
 
+-- des sources que le veilleur écarte LUI-MÊME (la piste Sample sans son joué) : rendues 3 s plus tard, pas à l'arrêt.
+-- Juste après l'arrêt Ardour travaille encore sur une capture neuve (le butler la ferme, un fil construit ses pics) :
+-- retirée à ce moment, elle restait ouverte (mesuré 2026-11-20 : « encore là » à chaque fois, quand celles que rend
+-- l'assembleur une seconde plus tard se ferment toutes), et retirer une source qu'un autre fil tient est risqué.
+REC.discard_later = function (files)
+	if #files == 0 then return end
+	REC.later = REC.later or {}
+	for _, f in ipairs (files) do REC.later[#REC.later + 1] = f end
+	REC.later_at = now_s () + 3.0
+end
+
+-- RENDRE des sources de prise à la session : retirées (Ardour ferme leurs fichiers), puis les fichiers effacés. Sous
+-- Windows un fichier ouvert ne s'efface pas — une répète laissait chaque prise en double sur le disque ; sous Linux un
+-- fichier déplacé garde sa place tant qu'il est ouvert. Seules les sources gardées dans REC.held (par perf_finalize).
+REC.release = function (files, why)
+	local list, gone = ARDOUR.SourceList (), {}
+	for _, f in ipairs (files) do
+		local src = REC.held and REC.held[f]
+		if src then list:push_back (src); REC.held[f] = nil; gone[#gone + 1] = f end
+	end
+	if #gone == 0 then return end
+	local n = ARDOUR.LuaAPI.release_sources (Session, list)
+	-- une source tenue par Lua (ses objets ne meurent qu'au ramasse-miettes) garde son fichier ouvert : mesuré
+	-- 2026-11-20, sans ce ramassage AUCUN fichier ne s'effaçait
+	list = nil
+	collectgarbage ("collect")
+	local kept = 0
+	for _, f in ipairs (gone) do
+		if not os.remove (f) then                    -- déjà déplacé par l'assembleur, ou encore tenu
+			local h = io.open (f, "r")
+			if h then h:close (); kept = kept + 1 end
+		end
+	end
+	log (string.format ("prise : %d source(s) rendue(s) %s, fermée(s)%s", n, why,
+		kept > 0 and string.format (" — %d fichier(s) encore là", kept) or ""))
+end
+
 -- la prise ARRÊTÉE : ce que chaque piste a écrit, les pistes retirées, l'assembleur lancé
 local function perf_finalize ()
 	REC.stopping = nil
 	Session:disable_record (false, true)
-	local tracks, rl = array (), ARDOUR.RouteListPtr ()
+	local tracks, rl, discard = array (), ARDOUR.RouteListPtr (), {}
 	for name, t in pairs (REC.tracks) do
 		t.route:rec_enable_control ():set_value (0, NG)
 		-- CHAQUE segment de la piste, à sa place : une prise mise en pause par un rappel (ou coupée par un décrochage)
@@ -2600,14 +2637,19 @@ local function perf_finalize ()
 		local segs = array ()
 		for reg in t.route:to_track ():playlist ():region_list ():iter () do
 			local files = array ()
-			if t.midi then
-				files[1] = reg:source (0):to_filesource ():path ()
-			else
-				for ch = 0, reg:to_audioregion ():n_channels () - 1 do files[#files + 1] = reg:source (ch):to_filesource ():path () end
+			-- chaque source GARDÉE par son chemin : l'assembleur dira quand il en a fini (RELEASE ci-dessous)
+			REC.held = REC.held or {}
+			for ch = 0, (t.midi and 0 or reg:to_audioregion ():n_channels () - 1) do
+				local src = reg:source (ch)
+				files[#files + 1] = src:to_filesource ():path ()
+				REC.held[files[#files]] = src
 			end
 			segs[#segs + 1] = { pos = reg:position ():samples (), len = reg:length ():samples (), files = files }
 		end
-		if t.keep_if_fired and (SAMPLE.fired_at or -1) < (REC.sample_from or 0) then segs = array () end   -- aucun sample : pas de fichier
+		if t.keep_if_fired and (SAMPLE.fired_at or -1) < (REC.sample_from or 0) then   -- aucun sample : pas de fichier
+			for _, sg in ipairs (segs) do for _, f in ipairs (sg.files) do discard[#discard + 1] = f end end
+			segs = array ()
+		end
 		if #segs > 0 then
 			tracks[#tracks + 1] = { name = name, segments = segs, midi = t.midi and true or nil,
 				bpm = t.midi and Temporal.TempoMap.read ():quarters_per_minute_at (Temporal.timepos_t (0)) or nil }
@@ -2671,6 +2713,7 @@ local function perf_finalize ()
 		REC.file = ""
 		perf_publish (false)
 		REC.preview = nil
+		REC.discard_later (discard)                      -- les fichiers bruts d'une prise en erreur, eux, restent
 		return
 	end
 	write_file (TAKE, json_encode ({ root = ROOT, file = REC.file, mode = REC.mode, started_at = REC.started,
@@ -2698,6 +2741,7 @@ local function perf_finalize ()
 			q (py), q (script), q (TAKE), q (ROOT .. "/presets/.engine-take.log")))
 	end
 	log ("prise : " .. #tracks .. " piste(s) écrite(s), assembleur lancé")
+	REC.discard_later (discard)                          -- la piste Sample sans son : rien à garder
 end
 
 -- à chaque tour : la fin d'une prise arrêtée, et le chien de garde d'une prise qui n'avance pas (carte perdue : le
@@ -2730,6 +2774,23 @@ function bench_off (P)
 end
 
 local function perf_tick ()
+	-- LES SOURCES D'UNE PRISE ASSEMBLÉE, RENDUES : l'assembleur liste les fichiers de capture qu'il a copiés, déplacés ou
+	-- assemblés (presets/.engine-take-released.json) ; on les rend (REC.release, plus haut). Jamais avant l'assembleur :
+	-- une source « jetable » retirée efface son fichier, et une piste en erreur garde ses fichiers bruts (jamais listés).
+	if REC.held and next (REC.held) and now_s () >= (REC.release_at or 0) then
+		REC.release_at = now_s () + 0.5
+		local path = ROOT .. "/presets/.engine-take-released.json"
+		local doc = read_json (path)
+		if doc then
+			os.remove (path)
+			REC.release (doc.files or {}, "par l'assembleur")
+		end
+	end
+	if REC.later and now_s () >= (REC.later_at or 0) then
+		local files = REC.later
+		REC.later = nil
+		REC.release (files, "sans sample joué")
+	end
 	if REC.preview and REC.on and REC.preview.bench and REC.preview.bench_at and now_s () >= REC.preview.bench_at
 	   and #(REC.preview.bench_runs or {}) < 3 then
 		bench_pass (REC.preview)

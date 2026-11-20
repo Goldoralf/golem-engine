@@ -77,6 +77,18 @@ namespace ARDOUR { namespace LuaAPI {
 	 */
 	std::shared_ptr<ARDOUR::Region> place_audio_file (Session* s, std::shared_ptr<ARDOUR::Route> r, const std::string& path, samplepos_t position);
 
+	/** Remove sources from the session (their regions drop with them), saving the session once
+	 *
+	 * A headless host that copies or moves its capture files elsewhere must let the session close
+	 * them: on Windows an open file cannot be deleted, elsewhere a moved file keeps its disk space
+	 * until it is closed.
+	 *
+	 * @param s Session Handle
+	 * @param srcs the sources to remove
+	 * @returns the number of sources removed
+	 */
+	int release_sources (Session* s, std::vector<std::shared_ptr<ARDOUR::Source> > const& srcs);
+
 	/** Create a null processor shared pointer
 	 *
 	 * This is useful for Track:bounce() to indicate no processing.
