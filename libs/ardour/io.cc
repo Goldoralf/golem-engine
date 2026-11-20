@@ -98,6 +98,18 @@ IO::IO (Session& s, const XMLNode& node, DataType dt, bool sendish)
 
 IO::~IO ()
 {
+	/* golem : se désabonner des ports AVANT tout, sous le verrou des rappels de connexion. Le fil du backend
+	 * émettait ConnectedOrDisconnected vers cet IO pendant sa destruction : les abonnements ne tombaient
+	 * qu'avec la classe de base, après les membres (_ports déjà détruit -> violation d'accès) */
+	if (PortManager::in_connect_callback ()) {
+		_port_connections.drop_connections ();
+		drop_connections ();
+	} else {
+		PBD::RWLock::WriterLock cl (_session.engine ().connect_callback_lock ());
+		_port_connections.drop_connections ();
+		drop_connections ();
+	}
+
 	DEBUG_TRACE (DEBUG::Ports, string_compose ("IO %1 unregisters %2 ports\n", name(), ports()->num_ports()));
 
 	BLOCK_PROCESS_CALLBACK ();

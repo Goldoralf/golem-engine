@@ -30,6 +30,7 @@
 #include "pbd/natsort.h"
 #include "pbd/rcu.h"
 #include "pbd/ringbuffer.h"
+#include "pbd/rwlock.h"
 
 #include "ardour/chan_count.h"
 #include "ardour/midiport_manager.h"
@@ -235,6 +236,14 @@ public:
 		return _port_remove_in_progress;
 	}
 
+	/* golem : un objet abonné aux signaux de connexion des ports (IO) prend ce verrou en ÉCRITURE pour se
+	 * désabonner avant de mourir. connect_callback émet sous le verrou en LECTURE, depuis le fil du backend :
+	 * sans lui, une émission déjà partie atteignait un IO détruit sur un autre fil (violation d'accès dans
+	 * IO::connection_change, banc golem 2026-11-20). in_connect_callback () : ce fil émet déjà — un IO qui
+	 * meurt pendant le rappel ne doit pas attendre son propre fil. */
+	PBD::RWLock& connect_callback_lock () { return _connect_callback_lock; }
+	static bool in_connect_callback ();
+
 	MidiPortFlags midi_port_metadata (std::string const&);
 
 	void get_configurable_midi_ports (std::vector<std::string>&, bool for_input);
@@ -281,6 +290,7 @@ protected:
 
 	bool                   _port_remove_in_progress;
 	PBD::RingBuffer<Port*> _port_deletions_pending;
+	PBD::RWLock            _connect_callback_lock;
 
 	std::shared_ptr<Port> register_port (DataType type, const std::string& portname, bool input, bool async = false, PortFlags extra_flags = PortFlags (0));
 	void                    port_registration_failure (const std::string& portname);

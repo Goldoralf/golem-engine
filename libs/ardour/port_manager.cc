@@ -974,9 +974,21 @@ PortManager::reconnect_ports (Session* s)
 	return 0;
 }
 
+static thread_local bool golem_in_connect_callback = false;
+
+bool
+PortManager::in_connect_callback ()
+{
+	return golem_in_connect_callback;
+}
+
 void
 PortManager::connect_callback (const string& a, const string& b, bool conn)
 {
+	/* golem : voir connect_callback_lock () — un abonné ne meurt pas pendant l'émission */
+	PBD::RWLock::ReaderLock cl (_connect_callback_lock);
+	PBD::Unwinder<bool> uw (golem_in_connect_callback, true);
+
 	DEBUG_TRACE (DEBUG::BackendCallbacks, string_compose (X_("connect callback %1 + %2 connected ? %3\n"), a, b, conn));
 
 	std::shared_ptr<Port>        port_a;
