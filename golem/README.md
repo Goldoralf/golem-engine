@@ -19,6 +19,8 @@ directory, so a rebase onto a new Ardour release never conflicts here. The plan 
 | `dev/env.sh` | Run the binaries from `build/` without installing (`source golem/dev/env.sh`) |
 | `tools/win-build.sh` | Windows build, natively in an MSYS2 UCRT64 shell: packages, configure, build (what each flag is for: in the script) |
 | `tools/win-portaudio-asio.sh` | PortAudio 19.7.0 built statically WITH ASIO (Steinberg's SDK 2.3.4, GPL v3 since 2025-10-15), both downloads pinned to their sha256, into `.deps/portaudio-asio` — `win-build.sh` uses it; the SDK is never committed |
+| `tools/win-lv2-deps.sh` | The engine's LV2 plugins for Windows into `.deps/lv2` — NAM, zeroconvolv, sfizz (with the `controllers.ttl` its installer lacks), setBfree rebuilt with its state-save fix — each download pinned (`tools/windows/README.md`). `bundle.py` ships them in `lib/lv2`; `engine/run.py` puts that folder (or `.deps/lv2` in a dev tree) first in `LV2_PATH` |
+| `tools/bundle.py` | The self-contained package: Linux (`ldd` closure into `deps/`) and, since 2026-11-20, Windows (`.exe`/`.dll`, the MSYS2 UCRT64 DLLs found through the PE imports into `deps/`, never Windows' own; `lib/lv2`) |
 
 Patches to upstream files (keep this list short; budget 10 — 12 since 2026-11-19, the two Windows ones are upstreamable; 14 since 2026-11-20, two teardown crash fixes, upstreamable):
 

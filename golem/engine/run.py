@@ -141,6 +141,16 @@ def engine_env(top, environ=None, home=None):
         # LES VST3 DE GOLEM (2026-11-19) : Ardour ne parcourt sous Windows que Program Files\Common Files\VST3 ;
         # golem-fx est posé dans %LOCALAPPDATA%\Programs\Common\VST3\GoleM — VST3_PATH (lu à sa première configuration)
         env.setdefault("VST3_PATH", P.join(vst3_dirs(env, home)))
+        # LES LV2 DU MOTEUR (2026-11-20) : NAM, zeroconvolv, sfizz (avec son controllers.ttl), setBfree corrigé — ceux du
+        # paquet (lib/lv2, golem/tools/win-lv2-deps.sh) ou de l'arbre de dev (.deps/lv2), D'ABORD : le sfizz que
+        # l'installateur de golem pose pour REAPER ne s'instancie pas ici. Puis %APPDATA%\LV2 (le lecteur de captures)
+        # et Common Files\LV2 (AVL Drumkits, mda…). Un LV2_PATH donné (un banc) est respecté.
+        if not env.get("LV2_PATH"):
+            lv2 = [d for d in (j(top, "lib", "lv2"), j(top, ".deps", "lv2")) if os.path.isdir(d)]
+            if env.get("APPDATA"):
+                lv2.append(j(env["APPDATA"], "LV2"))
+            lv2.append(j(env.get("CommonProgramFiles") or r"C:\Program Files\Common Files", "LV2"))
+            env["LV2_PATH"] = P.join(lv2)
     return env
 
 
