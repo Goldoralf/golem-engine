@@ -220,6 +220,26 @@ local BACKEND_PTR = nil                -- le backend (open_session) : les clavie
 local MIDI_PORTS = {}                  -- appareil MIDI ouvert -> ses ports de capture (system:midi_capture_…)
 local GONE = 0                         -- compteur des routes retirées (clear_routes : un nom unique avant le retrait)
 local RIG = { preset = nil, routes = {}, order = {}, blocks = {}, nch = {}, asleep = {}, specs = {}, mixer = {}, rec_before = 0 }
+-- UN SAMPLER RETIRÉ N'EST PAS DÉTRUIT TOUT DE SUITE (Windows 11, 2026-11-23). sfizz dit son fichier lu (« Number of
+-- regions ») dès que le .sfz est analysé, puis précharge ses échantillons dans SES fils pendant des secondes (le piano
+-- Salamander, cache disque froid : jusqu'à 13 s). Le détruire pendant ce temps faisait tomber le moteur — un preset
+-- avec le piano, un autre 4 s après : 0xC0000005 dans sfizz.dll, ou 0xC0000374 (tas corrompu) ; reproduit à chaque
+-- essai à froid. Garder sa bibliothèque chargée ne suffit pas (essayé : la faute passe dans sfizz.dll même). On garde
+-- donc ici la référence du plugin retiré — hors de toute route, il ne joue plus — et on ne la lâche que GRAVE.secs
+-- secondes plus tard, quand ses fils ont fini (rappels rapprochés à cache chaud : aucun plantage en 26 rappels).
+-- (une table GLOBALE : le fichier est à la limite des 200 variables locales de Lua)
+GRAVE = { held = {}, secs = 60 }
+GRAVE.keep = function (proc)
+	if proc then GRAVE.held[#GRAVE.held + 1] = { proc = proc, at = now_s () + GRAVE.secs } end
+end
+GRAVE.sweep = function ()
+	local t, kept, freed = now_s (), {}, 0
+	for _, g in ipairs (GRAVE.held) do
+		if g.at > t then kept[#kept + 1] = g else g.proc = nil; freed = freed + 1 end
+	end
+	GRAVE.held = kept
+	if freed > 0 then collectgarbage () end
+end
 -- L'HORLOGE MIDI (sa section plus bas) : une table GLOBALE — le fichier est à la limite des 200 locales de Lua.
 -- `ports[appareil]` = ses ports de SORTIE, relevés quand midi_device_ports ouvre un clavier.
 -- ⚠ SON NOM N'EST PAS « CLOCK » : `local CLOCK` (plus haut) est le chemin du TÉMOIN du fil audio (presets/.clock.json).
@@ -491,6 +511,9 @@ local function ensure_input_meters ()
 end
 
 local function clear_routes ()
+	for _, b in pairs (RIG.blocks) do
+		if b.spec and b.spec.loaded_output then GRAVE.keep (b.proc) end
+	end
 	local rl = ARDOUR.RouteListPtr ()
 	for r in Session:get_routes ():iter () do
 		-- les pistes d'une PRISE en cours (golem:rec:…) survivent à un rappel : la prise continue, sur le nouveau son
@@ -1439,6 +1462,7 @@ local function drums_kit (kp)
 	for _, prop in ipairs (keys) do sig = sig .. "|" .. prop .. "=" .. tostring (kp.files[prop]) end
 	if sig == DRUMS.kit_sig and DRUMS.kit then return true end
 	if DRUMS.kit then
+		GRAVE.keep (DRUMS.kit)                          -- un kit SFZ est un sfizz : pas détruit pendant qu'il charge
 		DRUMS.route:remove_processor (DRUMS.kit, nil, true)
 		DRUMS.kit = nil
 		collectgarbage ()
@@ -1623,7 +1647,7 @@ local function std_instrument (id, uri, files)
 	local sig = uri
 	for prop, path in pairs (files or {}) do sig = sig .. "|" .. prop .. "=" .. path end
 	if part.proc and part.sig == sig then return true end
-	if part.proc then part.route:remove_processor (part.proc, nil, true); part.proc = nil; collectgarbage () end
+	if part.proc then GRAVE.keep (part.proc); part.route:remove_processor (part.proc, nil, true); part.proc = nil; collectgarbage () end
 	local p = ARDOUR.LuaAPI.new_plugin (Session, uri, ARDOUR.PluginType.LV2, "")
 	if p:isnil () then log ("  standard : instrument absent pour " .. id .. " (" .. uri .. ")"); return false end
 	CHAIN.pre (part.route, p)
@@ -3679,6 +3703,7 @@ local function main ()
 		if now_s () >= next_beat then                -- le battement : le bridge sait que le veilleur vit (talking)
 			next_beat = now_s () + 2.0
 			pcall (MIDICLOCK.link)                        -- un clavier ouvert ou rouvert depuis : l'horloge le rejoint
+			pcall (GRAVE.sweep)                           -- les samplers retirés depuis plus de GRAVE.secs secondes
 			pcall (function () write_file (STATUS, json_encode (status ())) end)
 		end
 		if now_s () >= next_clock then               -- le témoin du thread audio, au schéma de golem_clock.lua
