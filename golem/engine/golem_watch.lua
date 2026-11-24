@@ -2979,7 +2979,14 @@ preview_restore = function ()
 end
 
 -- le DÉPART d'un rendu, commun : la piste de prise, la salle coupée, le transport depuis zéro, les lecteurs lancés
+-- LES DÉCROCHAGES DU DÉPART NE SONT PAS CEUX DU JEU (2026-11-24) : débrancher la salle, armer la piste de prise et
+-- lancer le transport en fait un à chaque rendu — la salle est coupée, personne ne l'entend. Non retenus, le banc CPU
+-- au repos en publiait un par bloc mesuré (54 pour 71 blocs, personne ne jouant) et Health affichait « Audio dropouts ».
+-- Retenus comme pour un montage (xr_hold / xr_release), relâchés même si le départ échoue. Une fonction anonyme et
+-- non une locale de plus : le bloc principal du veilleur est à la limite des 200 locales de Lua.
 local function preview_go (c, P, len, src)
+	xr_hold ()
+	local ok, err = pcall (function ()
 	REC.stamp = os.date ("%Y%m%d-%H%M%S")
 	REC.tracks = { ["Preview"] = rec_entry ("Preview", 2, { src = src, routes = P.service }) }
 	REC.allowed = function () return true end
@@ -3044,6 +3051,9 @@ local function preview_go (c, P, len, src)
 	log (string.format ("écoute : scène %s, %.1f s + %.1f s de queue, %s%s", tostring (c.scene), len, tonumber (c.tail) or 5.0,
 		src and ("entrée " .. src) or (#P.service .. " piste(s) de service"),
 		(c.midi or c.midis) and " (phrase MIDI)" or ""))
+	end)
+	xr_release ()
+	if not ok then error (err, 0) end
 end
 
 -- LE RENDU D'UN BLOC DE SERVICE (golem « Listen » sur une boîte à rythmes, un standard, un kit) : des phrases MIDI
