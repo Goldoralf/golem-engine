@@ -194,11 +194,24 @@ local function xr_tick ()
 	if now_s () >= XR.until_s then XR.until_s = 0 end
 end
 
+local BACKEND_PTR = nil                -- le backend (open_session) : les claviers s'y ouvrent à la demande
+
 local function status ()
+	-- la latence que le PILOTE déclare pour le flux ouvert, buffer compris (échantillons) : le panneau d'une carte ASIO
+	-- impose parfois son propre buffer (la Volt à 512 quand golem demandait 256, 2026-11-24) et la latence nominale
+	-- (deux buffers demandés) mentait. nil quand le backend ne la connaît pas (0) ou un moteur d'avant ce binding.
+	-- Locale ICI : le bloc principal est à la limite des 200 locales de Lua.
+	local function device_latency (dir)
+		local be = BACKEND_PTR
+		if not be then return nil end
+		local ok, n = pcall (function () return dir == "in" and be:device_input_latency () or be:device_output_latency () end)
+		return (ok and n and n > 0) and n or nil
+	end
 	return {
 		engine = "golem-engine", backend = AudioEngine:current_backend_name (),
 		running = AudioEngine:running (), sample_rate = Session:nominal_sample_rate (),
 		buffer = Session:get_block_size (),
+		latency_in = device_latency ("in"), latency_out = device_latency ("out"),
 		dsp_load = AudioEngine:get_dsp_load (), xruns = xruns_now (), xruns_all = Session:get_xrun_count (),
 		tracks = Session:get_tracks ():size (), rolling = Session:transport_rolling (), at = os.time (),
 		device = DEVICE_OPEN, inputs = N_IN, outputs = N_OUT, midi_in = MIDI_IN, midi_out = MIDI_OUT,
@@ -216,7 +229,6 @@ local RIGCHECK = ROOT .. "/presets/.rig-check.json"
 local DUMP = ROOT .. "/presets/.engine-dump.json"
 local SNAPSHOT = ROOT .. "/presets/.engine-snapshot.json"   -- la commande `snapshot` (le banc des presets)
 local NG = PBD.GroupControlDisposition.NoGroup
-local BACKEND_PTR = nil                -- le backend (open_session) : les claviers s'y ouvrent à la demande
 local MIDI_PORTS = {}                  -- appareil MIDI ouvert -> ses ports de capture (system:midi_capture_…)
 local GONE = 0                         -- compteur des routes retirées (clear_routes : un nom unique avant le retrait)
 local RIG = { preset = nil, routes = {}, order = {}, blocks = {}, nch = {}, asleep = {}, specs = {}, mixer = {}, rec_before = 0 }

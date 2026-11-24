@@ -146,6 +146,8 @@ class PortAudioBackend : public AudioBackend, public PortEngineSharedImpl {
 		bool         interleaved () const;
 		uint32_t     systemic_input_latency () const;
 		uint32_t     systemic_output_latency () const;
+		uint32_t     device_input_latency () const;  /* [golem] */
+		uint32_t     device_output_latency () const; /* [golem] */
 		uint32_t     systemic_midi_input_latency (std::string const) const;
 		uint32_t     systemic_midi_output_latency (std::string const) const;
 

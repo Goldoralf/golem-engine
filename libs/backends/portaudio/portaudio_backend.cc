@@ -402,6 +402,20 @@ PortAudioBackend::systemic_output_latency () const
 	return _systemic_audio_output_latency;
 }
 
+/* [golem] what PortAudio reports for the open stream (Pa_GetStreamInfo): with ASIO, the driver's latencies at
+ * the buffer its panel imposes, not the one requested */
+uint32_t
+PortAudioBackend::device_input_latency () const
+{
+	return (_run && _pcmio) ? _pcmio->capture_latency () : 0;
+}
+
+uint32_t
+PortAudioBackend::device_output_latency () const
+{
+	return (_run && _pcmio) ? _pcmio->playback_latency () : 0;
+}
+
 uint32_t
 PortAudioBackend::systemic_midi_input_latency (std::string const device) const
 {

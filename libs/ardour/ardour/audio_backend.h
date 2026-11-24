@@ -540,6 +540,12 @@ public:
 
 	virtual uint32_t period_size () const { return 0; }
 
+	/* [golem] the latency the device driver reports for the running stream, buffering included, in samples;
+	 * 0 when unknown or stopped. A driver's own control panel may impose a buffer larger than the one
+	 * requested (ASIO): buffer_size () is then not what the musician hears. Not used for latency compensation. */
+	virtual uint32_t device_input_latency () const { return 0; }
+	virtual uint32_t device_output_latency () const { return 0; }
+
 	/** override this if this implementation returns true from
 	 * requires_driver_selection()
 	 */
