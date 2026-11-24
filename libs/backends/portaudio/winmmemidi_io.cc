@@ -271,7 +271,20 @@ WinMMEMidiIO::update_device_info ()
 		}
 	}
 
-	clear_device_info ();
+	/* golem (2026-11-24) : GARDER les fiches des appareils toujours là. L'original les effaçait et les recréait à chaque
+	 * énumération, `enable` revenu à vrai par défaut : le veilleur, qui énumère avant d'activer un clavier, effaçait
+	 * ainsi la fermeture du départ — set_midi_device_enabled voyait « déjà activé » et n'ouvrait rien (le MPK sans port).
+	 * Une fiche gardée garde aussi son pointeur : le backend en tient (midi_device_info, set_systemic_*_latency). */
+	std::vector<MidiDeviceInfo*> kept;
+	for (std::vector<MidiDeviceInfo*>::iterator i = m_device_info.begin (); i != m_device_info.end (); ++i) {
+		if (device_names.count ((*i)->device_name)) {
+			kept.push_back (*i);
+			device_names.erase ((*i)->device_name);
+		} else {
+			delete *i;
+		}
+	}
+	m_device_info = kept;
 
 	for (std::set<std::string>::const_iterator i = device_names.begin();
 	     i != device_names.end();
@@ -393,6 +406,86 @@ WinMMEMidiIO::destroy_output_devices ()
 	}
 }
 
+/* golem (2026-11-24) : OUVRIR UN APPAREIL À CHAUD. Le veilleur de golem démarre le moteur avec tous les appareils MIDI
+ * fermés (la prise DIN de la carte appartient au bridge : sous Windows un port ne s'ouvre qu'une fois), puis active un
+ * par un les claviers des lanes MIDI (set_midi_device_enabled). Ici, activer ne faisait que lever un drapeau : les
+ * appareils ne s'ouvrent qu'au démarrage (discover), register_system_midi_ports ne parcourait que ceux-là — le clavier
+ * n'avait aucun port, la lane Keys restait muette (« MPK Mini Mk II ouvert (0 port(s)) »). Et sans aucun appareil au
+ * départ, m_active restait faux : aucun événement n'était jamais lu.
+ *
+ * Le fil audio lit m_inputs[i] / m_outputs[i] par INDEX, sans verrou, pour i < taille de _system_midi_in / _out du
+ * backend. L'appareil est donc AJOUTÉ EN FIN de liste AVANT que son port ne soit enregistré (le fil audio ne lit son
+ * index qu'une fois le port là), dans une capacité RÉSERVÉE (aucune réallocation sous ses pieds). */
+static const size_t MaxWinMMEDevices = 64;
+
+bool
+WinMMEMidiIO::open_device (const std::string& name)
+{
+	if (!m_run) {
+		return false;
+	}
+	pthread_mutex_lock (&m_device_lock);
+	bool added = false;
+
+	int n = midiInGetNumDevs ();
+	for (int i = 0; i < n; ++i) {
+		std::string nm;
+		if (!get_input_name_from_index (i, nm) || nm != name) {
+			continue;
+		}
+		bool have = false;
+		for (std::vector<WinMMEMidiInputDevice*>::const_iterator d = m_inputs.begin (); d != m_inputs.end (); ++d) {
+			have = have || (*d)->name () == name;
+		}
+		if (have || m_inputs.size () >= m_inputs.capacity ()) {
+			continue;
+		}
+		try {
+			WinMMEMidiInputDevice* dev = new WinMMEMidiInputDevice (i);
+			if (dev->start ()) {
+				m_inputs.push_back (dev);
+				added = true;
+			} else {
+				delete dev;
+			}
+		} catch (...) {
+			PBD::error << string_compose (_("Unable to open MIDI input device %1\n"), name) << endmsg;
+		}
+	}
+
+	n = midiOutGetNumDevs ();
+	for (int i = 0; i < n; ++i) {
+		std::string nm;
+		if (!get_output_name_from_index (i, nm) || nm != name) {
+			continue;
+		}
+		bool have = false;
+		for (std::vector<WinMMEMidiOutputDevice*>::const_iterator d = m_outputs.begin (); d != m_outputs.end (); ++d) {
+			have = have || (*d)->name () == name;
+		}
+		if (have || m_outputs.size () >= m_outputs.capacity ()) {
+			continue;
+		}
+		try {
+			WinMMEMidiOutputDevice* dev = new WinMMEMidiOutputDevice (i);
+			if (dev->start ()) {
+				m_outputs.push_back (dev);
+				added = true;
+			} else {
+				delete dev;
+			}
+		} catch (...) {
+			PBD::error << string_compose (_("Unable to open MIDI output device %1\n"), name) << endmsg;
+		}
+	}
+
+	if (added) {
+		m_active = true;
+	}
+	pthread_mutex_unlock (&m_device_lock);
+	return added;
+}
+
 void
 WinMMEMidiIO::discover()
 {
@@ -405,6 +498,10 @@ WinMMEMidiIO::discover()
 	}
 
 	cleanup ();
+
+	// golem : une capacité réservée — open_device ajoute à chaud sans jamais réallouer (le fil audio lit par index)
+	m_inputs.reserve (MaxWinMMEDevices);
+	m_outputs.reserve (MaxWinMMEDevices);
 
 	create_input_devices ();
 	create_output_devices ();

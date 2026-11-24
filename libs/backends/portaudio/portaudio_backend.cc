@@ -509,6 +509,11 @@ PortAudioBackend::set_midi_device_enabled (std::string const device, bool enable
 
 	if (_run && was_enabled != enable) {
 		if (enable) {
+			/* golem : l'OUVRIR d'abord — les appareils WinMME ne s'ouvraient qu'au démarrage, et un appareil activé
+			 * moteur lancé n'avait aucun port (winmmemidi_io.cc, open_device) */
+			if (_midi_driver_option == winmme_driver_name) {
+				_midiio->open_device (device);
+			}
 			/* add ports for the given device */
 			register_system_midi_ports (device);
 		} else {

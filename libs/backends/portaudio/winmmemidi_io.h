@@ -84,6 +84,9 @@ public:
 
 	void update_device_info ();
 
+	/* golem : ouvre À CHAUD l'appareil `name` (entrée et/ou sortie) — voir winmmemidi_io.cc */
+	bool open_device (const std::string& name);
+
 	std::vector<MidiDeviceInfo*> get_device_info () { return m_device_info; }
 
 	MidiDeviceInfo* get_device_info (const std::string& name);
