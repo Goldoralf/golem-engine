@@ -546,6 +546,13 @@ public:
 	virtual uint32_t device_input_latency () const { return 0; }
 	virtual uint32_t device_output_latency () const { return 0; }
 
+	/* [golem] cycles that came too late since the stream started, for a backend whose driver reports no xrun
+	 * (ASIO): late_cycles () counts cycles whose processing took longer than one period, late_starts () callbacks
+	 * that started more than one period after the previous one (a driver or an interrupt held the CPU). Both are
+	 * heard as clicks. 0 when the backend does not count them (ALSA reports real xruns). */
+	virtual uint32_t late_cycles () const { return 0; }
+	virtual uint32_t late_starts () const { return 0; }
+
 	/** override this if this implementation returns true from
 	 * requires_driver_selection()
 	 */

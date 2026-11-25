@@ -21,6 +21,7 @@
 #ifndef __libbackend_portaudio_backend_h__
 #define __libbackend_portaudio_backend_h__
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -148,6 +149,8 @@ class PortAudioBackend : public AudioBackend, public PortEngineSharedImpl {
 		uint32_t     systemic_output_latency () const;
 		uint32_t     device_input_latency () const;  /* [golem] */
 		uint32_t     device_output_latency () const; /* [golem] */
+		uint32_t     late_cycles () const { return _late_cycles.load (std::memory_order_relaxed); } /* [golem] */
+		uint32_t     late_starts () const { return _late_starts.load (std::memory_order_relaxed); } /* [golem] */
 		uint32_t     systemic_midi_input_latency (std::string const) const;
 		uint32_t     systemic_midi_output_latency (std::string const) const;
 
@@ -313,6 +316,11 @@ class PortAudioBackend : public AudioBackend, public PortEngineSharedImpl {
 
 		CycleTimer _cycle_timer;
 		uint64_t _last_cycle_start;
+
+		/* [golem] late cycles since the stream started (see AudioBackend::late_cycles) */
+		std::atomic<uint32_t> _late_cycles {0};
+		std::atomic<uint32_t> _late_starts {0};
+		bool _late_armed {false};   /* the first cycle after a start has no previous cycle to compare with */
 
 		static std::vector<std::string> _midi_options;
 		static std::vector<AudioBackend::DeviceStatus> _input_audio_device_status;

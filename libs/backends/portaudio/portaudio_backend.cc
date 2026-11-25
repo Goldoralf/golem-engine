@@ -605,6 +605,9 @@ PortAudioBackend::_start (bool for_latency_measurement)
 	_dsp_load = 0;
 	_freewheeling = false;
 	_freewheel = false;
+	_late_cycles = 0;     /* [golem] */
+	_late_starts = 0;
+	_late_armed = false;
 
 	PaErrorCode err = paNoError;
 
@@ -784,6 +787,7 @@ PortAudioBackend::process_callback(const float* input,
 
 	if (!_run || _freewheel) {
 		memset(output, 0, sample_count * sizeof(float) * _system_outputs.size());
+		_late_armed = false;   /* [golem] the next real-time cycle has no previous one to compare with */
 		return true;
 	}
 
@@ -1576,6 +1580,7 @@ PortAudioBackend::blocking_process_thread ()
 			engine.freewheel_callback (_freewheel);
 			if (!_freewheel) {
 				_dsp_calc.reset ();
+				_late_armed = false;   /* [golem] */
 			} else {
 				_freewheel_processed = 0;
 			}
@@ -1711,6 +1716,23 @@ PortAudioBackend::blocking_process_main(const float* interleaved_input_data,
 	/* calculate DSP load */
 	_dsp_calc.set_stop_timestamp_us (PBD::get_microseconds());
 	_dsp_load = _dsp_calc.get_dsp_load();
+
+	/* [golem] a cycle is late when it ends after its deadline: one period after it should have started (the
+	 * previous start plus a period). A start delayed by a driver or an interrupt eats into that period as much as
+	 * the processing does. ASIO reports neither as an xrun, yet both are heard as clicks. Late cycles whose start
+	 * alone was more than half a period late are also counted apart: the cause is outside the engine. Consecutive
+	 * late callbacks are under-counted (each is compared with the previous, late, start): a conservative count. */
+	if (_late_armed) {
+		const int64_t period_us = (int64_t)_cycle_timer.get_length_us();
+		const int64_t late_by = std::max<int64_t>(deviation_us, 0) + (int64_t)_dsp_calc.elapsed_time_us() - period_us;
+		if (late_by > 0) {
+			_late_cycles.fetch_add (1, std::memory_order_relaxed);
+			if (deviation_us > period_us / 2) {
+				_late_starts.fetch_add (1, std::memory_order_relaxed);
+			}
+		}
+	}
+	_late_armed = true;
 
 	DEBUG_TIMING(string_compose("DSP Load: %1\n", _dsp_load));
 

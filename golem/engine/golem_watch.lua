@@ -173,14 +173,29 @@ local DEVICE_OPEN, N_IN, N_OUT, MIDI_IN, MIDI_OUT = nil, 0, 0, {}, {}
 -- — le son est de toute façon coupé à ce moment-là —, et démarrer le moteur en fait une trentaine : comptés, ils
 -- allumaient « Audio dropouts » en rouge à chaque démarrage (37 au rack le 2026-11-17, aucun en jouant). Pendant le
 -- démarrage et un rappel, et 0,7 s après, ce que le moteur compte n'entre pas dans le total publié.
+local BACKEND_PTR = nil                -- le backend (open_session) : les claviers s'y ouvrent à la demande
 local XR = { skip = 0, base = 0, until_s = math.huge }
+-- le compte BRUT : les xruns de la session, plus les cycles EN RETARD que compte le backend PortAudio (patch 16,
+-- 2026-11-25) — sous ASIO le pilote ne signale aucun xrun, et un cycle fini après son échéance est un clic comme un
+-- autre. Le compteur du backend repart de zéro à chaque ouverture du flux (un buffer changé, la carte rouverte) :
+-- ces gestes sont retenus comme un montage (xr_hold / xr_release), et la baisse est absorbée par `skip`. Un champ de
+-- XR, pas une locale : le bloc principal est à la limite des 200 locales de Lua.
+XR.raw = function ()
+	local ok, n = pcall (function () return Session:get_xrun_count () end)
+	local late = 0
+	if BACKEND_PTR then
+		local ok2, l = pcall (function () return BACKEND_PTR:late_cycles () end)
+		if ok2 and l then late = l end
+	end
+	return ok and n + late or nil
+end
 local function xruns_now ()
 	-- pendant un montage et son délai de grâce : le total d'AVANT, figé — publié brut puis corrigé, il redescendait, et
 	-- le bridge prend une baisse pour un redémarrage du moteur : il recomptait tout (164 « décrochages » pour les 72
 	-- rappels d'une calibration, rack, 2026-11-17)
 	if XR.until_s ~= 0 then return XR.base end
-	local ok, n = pcall (function () return Session:get_xrun_count () end)
-	return ok and math.max (0, n - XR.skip) or 0
+	local n = XR.raw ()
+	return n and math.max (0, n - XR.skip) or 0
 end
 local function xr_hold ()                                                      -- avant un montage
 	if XR.until_s == 0 then XR.base = xruns_now () end
@@ -189,12 +204,10 @@ end
 local function xr_release () XR.until_s = now_s () + 0.7 end                   -- après : encore un instant
 local function xr_tick ()
 	if XR.until_s == 0 then return end
-	local ok, n = pcall (function () return Session:get_xrun_count () end)
-	if ok then XR.skip = n - XR.base end
+	local n = XR.raw ()
+	if n then XR.skip = n - XR.base end
 	if now_s () >= XR.until_s then XR.until_s = 0 end
 end
-
-local BACKEND_PTR = nil                -- le backend (open_session) : les claviers s'y ouvrent à la demande
 
 local function status ()
 	-- la latence que le PILOTE déclare pour le flux ouvert, buffer compris (échantillons) : le panneau d'une carte ASIO
@@ -207,11 +220,21 @@ local function status ()
 		local ok, n = pcall (function () return dir == "in" and be:device_input_latency () or be:device_output_latency () end)
 		return (ok and n and n > 0) and n or nil
 	end
+	-- les cycles EN RETARD depuis l'ouverture du flux (patch 16, 2026-11-25) : sous ASIO le pilote ne signale aucun
+	-- décrochage, et ce compteur est la seule trace des clics. Seul PortAudio les compte (ALSA a ses vrais xruns) :
+	-- nil ailleurs, et avec un moteur d'avant ce binding.
+	local function late (which)
+		local be = BACKEND_PTR
+		if not be or not tostring (AudioEngine:current_backend_name ()):find ("PortAudio") then return nil end
+		local ok, n = pcall (function () return which == "cycles" and be:late_cycles () or be:late_starts () end)
+		return ok and n or nil
+	end
 	return {
 		engine = "golem-engine", backend = AudioEngine:current_backend_name (),
 		running = AudioEngine:running (), sample_rate = Session:nominal_sample_rate (),
 		buffer = Session:get_block_size (),
 		latency_in = device_latency ("in"), latency_out = device_latency ("out"),
+		late_cycles = late ("cycles"), late_starts = late ("starts"),
 		dsp_load = AudioEngine:get_dsp_load (), xruns = xruns_now (), xruns_all = Session:get_xrun_count (),
 		tracks = Session:get_tracks ():size (), rolling = Session:transport_rolling (), at = os.time (),
 		device = DEVICE_OPEN, inputs = N_IN, outputs = N_OUT, midi_in = MIDI_IN, midi_out = MIDI_OUT,
@@ -1187,9 +1210,11 @@ local function set_buffer (n)
 	n = tonumber (n)
 	if not n or n == Session:get_block_size () then return true end
 	local t0 = now_s ()
-	AudioEngine:stop (false)
+	xr_hold ()                     -- le flux rouvert : ses premiers cycles ne sont pas ceux du jeu (et le compteur de
+	AudioEngine:stop (false)       -- cycles en retard du backend repart de zéro — voir XR.raw)
 	AudioEngine:set_buffer_size (n)
 	local rc = AudioEngine:start (false)
+	xr_release ()
 	log (string.format ("buffer -> %d (moteur relancé en %.0f ms, rc %s, bloc %d)", n, (now_s () - t0) * 1000,
 		tostring (rc), Session:get_block_size ()))
 	return rc == 0
@@ -1200,8 +1225,10 @@ end
 -- `set_buffer` sans changer la taille.
 local function audio_reset ()
 	local t0 = now_s ()
+	xr_hold ()                     -- comme un buffer changé (voir set_buffer)
 	AudioEngine:stop (false)
 	local rc = AudioEngine:start (false)
+	xr_release ()
 	log (string.format ("carte rouverte en %.0f ms (rc %s, en marche : %s)", (now_s () - t0) * 1000, tostring (rc),
 		tostring (AudioEngine:running ())))
 	return rc == 0

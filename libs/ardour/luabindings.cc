@@ -3076,6 +3076,8 @@ LuaBindings::common (lua_State* L)
 		.addFunction ("midi_device_enabled", &AudioBackend::midi_device_enabled)
 		.addFunction ("device_input_latency", &AudioBackend::device_input_latency)   /* [golem] */
 		.addFunction ("device_output_latency", &AudioBackend::device_output_latency) /* [golem] */
+		.addFunction ("late_cycles", &AudioBackend::late_cycles)                     /* [golem] */
+		.addFunction ("late_starts", &AudioBackend::late_starts)                     /* [golem] */
 		.endClass()
 
 		.beginClass <PortEngine> ("PortEngine")
