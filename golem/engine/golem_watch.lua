@@ -3564,6 +3564,17 @@ local function open_session ()
 		-- passé par l'adaptateur) — sans rien, PortAudio ouvrait l'ASIO à 1024 échantillons (2026-11-20)
 		local buf = (cfg and cfg.buffer) or tonumber (os.getenv ("GOLEM_ENGINE_BUFFER"))
 		if buf then be:set_buffer_size (buf) end
+		-- TROIS PÉRIODES SOUS ALSA (2026-11-25, rack Linux, PreSonus AudioBox iTwo en USB) : Ardour en ouvre 2 par défaut
+		-- (tampon = 2 × buffer). Une carte USB n'y tient pas : xruns en rafale (230 en 30 s sur un patch à 55 % de DSP), puis
+		-- « Audio Process Terminated after 938 consecutive xruns » et plus aucun son — le fil audio ne travaillait qu'à 4 %,
+		-- il attendait la carte. REAPER en ouvre 3 sur la même carte. Avec 3 : 0 xrun en 90 s. Le choix « Periods » de
+		-- l'écran audio d'Ardour ; GOLEM_ENGINE_PERIODS le change (2 ou 3, ce que le backend ALSA accepte).
+		if BACKEND:find ("ALSA", 1, true) then
+			local np = tonumber (os.getenv ("GOLEM_ENGINE_PERIODS")) or 3
+			local ok = pcall (function () be:set_peridod_size (np) end)
+			local got = ok and select (2, pcall (function () return be:period_size () end)) or nil
+			log ("périodes ALSA : " .. tostring (got or "?") .. " (demandées : " .. np .. ")")
+		end
 		log ("carte : " .. dev .. " (demandée : " .. DEVICE .. ")" .. (buf and (", buffer " .. buf) or ""))
 	end
 	local cfg = ARDOUR.config ()
